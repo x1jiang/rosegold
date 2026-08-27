@@ -1,0 +1,35 @@
+FROM python:3.11-slim
+
+WORKDIR /workspace
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8080 \
+    ROSEGOLD_DATA_DIR=/workspace/data \
+    ROSEGOLD_API_URL=http://127.0.0.1:8000 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    STREAMLIT_SERVER_HEADLESS=true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /workspace/requirements.txt
+RUN pip install --no-cache-dir -r /workspace/requirements.txt \
+    && pip install --no-cache-dir huggingface_hub \
+    && pip install --no-cache-dir \
+        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+        llama-cpp-python
+
+COPY app /workspace/app
+COPY configs /workspace/configs
+COPY data /workspace/data
+COPY start_cloudrun.sh /workspace/start_cloudrun.sh
+COPY start_services.sh /workspace/start_services.sh
+
+RUN chmod +x /workspace/start_cloudrun.sh /workspace/start_services.sh
+
+EXPOSE 8080 8000 8501
+
+CMD ["/workspace/start_cloudrun.sh"]

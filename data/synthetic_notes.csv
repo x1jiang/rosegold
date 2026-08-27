@@ -1,0 +1,50 @@
+note_id,person_id,visit_occurrence_id,note_date,note_datetime,note_type_concept_id,note_title,note_text
+40001,1001,20001,2026-03-01,2026-03-01 10:00:00,44814637,ED Note,"74yo F nursing home resident with fever 39.1C, HR 128, BP 76/42 (MAP 53), lactate 4.2. Urosepsis. Starting Norepinephrine. Transfer to MICU."
+40002,1001,20001,2026-03-01,2026-03-01 10:00:00,44814637,MICU Day 2,Intubated on Levophed 0.14 mcg/kg/min. Blood culture positive for ESBL Klebsiella. Lactate clearing 2.4. AKI with Cr 2.8.
+40003,1001,20001,2026-03-01,2026-03-01 10:00:00,44814637,Discharge Summary,Severe Sepsis and Septic Shock secondary to Klebsiella urosepsis (Resolved). Completed 7 days IV Cefepime.
+40004,1002,20002,2026-03-05,2026-03-05 10:00:00,44814637,Pre-Op H&P,"62yo M admitted for elective right total knee arthroplasty. Normal vitals. WBC 6.1, Cr 0.8."
+40005,1002,20002,2026-03-05,2026-03-05 10:00:00,44814637,Discharge Summary,Uncomplicated right TKR. Afebrile throughout stay. Incision clean. Discharged home in stable condition.
+40006,1003,20003,2026-03-10,2026-03-10 10:00:00,44814637,Neurology Consult,"68yo M with acute right hemiplegia and aphasia, NIHSS 18. CTA shows Left M1 MCA occlusion. Administered TNK, emergent thrombectomy TICI 3."
+40007,1003,20003,2026-03-10,2026-03-10 10:00:00,44814637,Discharge Summary,Acute Ischemic Stroke Left MCA territory. NIHSS improved to 3. Started Apixaban for new atrial fibrillation.
+40008,1004,20004,2026-03-12,2026-03-12 10:00:00,44814637,Admission H&P,"55yo M with productive cough, T 38.3C, HR 98, BP 118/74, CXR shows right lower lobe consolidation. Lactate 1.2. Ceftriaxone initiated."
+40009,1004,20004,2026-03-12,2026-03-12 10:00:00,44814637,Discharge Summary,Uncomplicated CAP. Afebrile 48 hours. No sepsis or organ dysfunction. Discharged home on oral Levofloxacin.
+40010,1005,20005,2026-03-18,2026-03-18 10:00:00,44814637,Trauma H&P,"29yo M post-MVA with rib fractures. HR 114, WBC 14.8 due to pain/stress. No infection."
+40011,1005,20005,2026-03-18,2026-03-18 10:00:00,44814637,Discharge Summary,"Blunt chest trauma. Pain controlled, afebrile, normal labs. Discharged home."
+40012,1006,20006,2026-03-20,2026-03-20 10:00:00,44814637,ED Note,"45yo F with acute respiratory distress, SpO2 82% on RA, bilateral diffuse ground glass opacities. COVID-19 PCR positive."
+40013,1006,20006,2026-03-20,2026-03-20 10:00:00,44814637,ICU Progress Note,Severe ARDS with PaO2/FiO2 ratio 88 mmHg. Paralyzed and placed in prone position for 16 hours. Inhaled Epoprostenol started.
+40014,1006,20006,2026-03-20,2026-03-20 10:00:00,44814637,Discharge Summary,Acute Respiratory Distress Syndrome (Severe ARDS) successfully weaned from mechanical ventilation. Discharged to rehab.
+40015,1007,20007,2026-03-22,2026-03-22 10:00:00,44814637,ED H&P,"80yo M found down for 18 hours. Serum CK 45,000 U/L, Creatinine 4.6 mg/dL (baseline 1.0), dark tea-colored urine."
+40016,1007,20007,2026-03-22,2026-03-22 10:00:00,44814637,Nephrology Consult,Severe pigment nephropathy AKI KDIGO Stage 3. Aggressive isotonic bicarbonate infusion.
+40017,1007,20007,2026-03-22,2026-03-22 10:00:00,44814637,Discharge Summary,"Acute Kidney Injury secondary to rhabdomyolysis, renal function recovered without need for hemodialysis (Cr 1.4)."
+40018,1008,20008,2026-03-25,2026-03-25 10:00:00,44814637,Surgery Consult,"24yo M with RLQ pain, McBurney tenderness, T 37.9C, WBC 15.2. CT abdomen confirms acute suppurative appendicitis."
+40019,1008,20008,2026-03-25,2026-03-25 10:00:00,44814637,Operative Report,Laparoscopic appendectomy performed. Appendix non-perforated.
+40020,1008,20008,2026-03-25,2026-03-25 10:00:00,44814637,Discharge Summary,Acute simple appendicitis s/p lap appendectomy. Discharged home tolerating regular diet.
+40021,1009,20009,2026-03-26,2026-03-26 10:00:00,44814637,Admission Note,"58yo diabetic M with expanding lower extremity erythema, T 39.4C, HR 122, BP 88/54, WBC 21.0. Blood cultures positive for MSSA."
+40022,1009,20009,2026-03-26,2026-03-26 10:00:00,44814637,ID Consult,MSSA bacteremia secondary to severe cellulitis. Cefazolin 2g IV q8h. Echocardiogram negative for endocarditis.
+40023,1009,20009,2026-03-26,2026-03-26 10:00:00,44814637,Discharge Summary,MSSA Sepsis with bacteremia and lower extremity cellulitis. Clinical cure.
+40024,1010,20010,2026-03-28,2026-03-28 10:00:00,44814637,Neurocritical Care H&P,"51yo F with sudden 'worst headache of life' (thunderclap), Hunt-Hess 3, Fisher Grade 3 SAH from anterior communicating aneurysm."
+40025,1010,20010,2026-03-28,2026-03-28 10:00:00,44814637,Endovascular Note,Successful coil embolization of ACoA aneurysm.
+40026,1010,20010,2026-03-28,2026-03-28 10:00:00,44814637,Discharge Summary,Aneurysmal SAH status post endovascular coiling. Transferred to neuro-rehab.
+40027,1011,20011,2026-04-01,2026-04-01 10:00:00,44814637,Cardiology H&P,"71yo M with 15lb weight gain, orthopnea, bilateral 3+ pitting edema, BNP 3,400 pg/mL, afebrile."
+40028,1011,20011,2026-04-01,2026-04-01 10:00:00,44814637,Discharge Summary,Acute exacerbation of chronic systolic heart failure (EF 25%). Successfully diuresed with IV Furosemide (total net negative 6L).
+40029,1012,20012,2026-04-03,2026-04-03 10:00:00,44814637,Surgery Note POD 4,"65yo F s/p sigmoid resection develops new tachycardia HR 135, T 39.2C, BP 82/50, rigid abdomen. CT shows anastomotic dehiscence and free air."
+40030,1012,20012,2026-04-03,2026-04-03 10:00:00,44814637,ICU Note,Post-op septic shock s/p emergent exploratory laparotomy and Hartmann procedure. On Norepinephrine.
+40031,1012,20012,2026-04-03,2026-04-03 10:00:00,44814637,Discharge Summary,Post-operative intra-abdominal sepsis and septic shock resolved.
+40032,1013,20013,2026-04-05,2026-04-05 10:00:00,44814637,Ophthalmology H&P,72yo F elective phacoemulsification with intraocular lens placement. Uncomplicated outpatient procedure.
+40033,1014,20014,2026-04-07,2026-04-07 10:00:00,44814637,Neurology Consult,"60yo M with 20-minute episode of left arm weakness and dysarthria, completely resolved on arrival. MRI brain DWI negative for acute infarct."
+40034,1014,20014,2026-04-07,2026-04-07 10:00:00,44814637,Discharge Summary,"Transient Ischemic Attack (TIA), ABCD2 score 4. Started on Dual Antiplatelet Therapy (DAPT)."
+40035,1015,20015,2026-04-10,2026-04-10 10:00:00,44814637,Admission H&P,"42yo M with severe epigastric pain radiating to back, Lipase 4,800 U/L, SIRS positive, hemoconcentration with Hct 49%."
+40036,1015,20015,2026-04-10,2026-04-10 10:00:00,44814637,GI Progress Note,Severe gallstone pancreatitis with 30% pancreatic parenchymal necrosis. ICU monitoring for multi-organ failure.
+40037,1015,20015,2026-04-10,2026-04-10 10:00:00,44814637,Discharge Summary,Severe Acute Pancreatitis (Balthazar E). Organ failure resolved with aggressive hydration.
+40038,1016,20016,2026-04-12,2026-04-12 10:00:00,44814637,Surgical H&P,"48yo M elective robotic inguinal hernia repair. Uncomplicated recovery, discharged next morning."
+40039,1017,20017,2026-04-14,2026-04-14 10:00:00,44814637,Medicine H&P,"31yo F with right flank pain, CVA tenderness, T 38.5C, HR 92, BP 112/70. Urine culture positive for E. coli. Lactate normal at 1.1."
+40040,1017,20017,2026-04-14,2026-04-14 10:00:00,44814637,Discharge Summary,Acute uncomplicated pyelonephritis. Responded to IV Ceftriaxone. No sepsis or hemodynamic instability.
+40041,1018,20018,2026-04-18,2026-04-18 10:00:00,44814637,Cath Lab Note,64yo M anterior STEMI with 100% LAD occlusion. Primary PCI with DES. Hypotension and pulmonary edema. Intra-aortic balloon pump placed.
+40042,1018,20018,2026-04-18,2026-04-18 10:00:00,44814637,CCU Progress Note,"Cardiogenic shock secondary to acute myocardial infarction. Dobutamine infusion. Afebrile, WBC normal, no infection."
+40043,1018,20018,2026-04-18,2026-04-18 10:00:00,44814637,Discharge Summary,"Acute STEMI complicated by cardiogenic shock, stabilized and weaned off inotropic support."
+40044,1019,20019,2026-04-20,2026-04-20 10:00:00,44814637,Oncology Admission,"53yo F post-chemotherapy with Absolute Neutrophil Count (ANC) 120 /mcL, T 39.5C, HR 125, BP 84/48. Urgent Cefepime + Vancomycin."
+40045,1019,20019,2026-04-20,2026-04-20 10:00:00,44814637,ICU Progress Note,Neutropenic septic shock. G-CSF support. Blood cultures grew Pseudomonas aeruginosa.
+40046,1019,20019,2026-04-20,2026-04-20 10:00:00,44814637,Discharge Summary,Pseudomonas neutropenic septic shock resolved with neutrophil recovery.
+40047,1020,20020,2026-04-25,2026-04-25 10:00:00,44814637,ED H&P,"22yo M with Type 1 Diabetes, blood glucose 640 mg/dL, pH 7.12, anion gap 26, beta-hydroxybutyrate > 6.0. Afebrile, chest x-ray clear."
+40048,1020,20020,2026-04-25,2026-04-25 10:00:00,44814637,ICU Note,DKA protocol with IV regular insulin and potassium replacement. Anion gap closed within 14 hours.
+40049,1020,20020,2026-04-25,2026-04-25 10:00:00,44814637,Discharge Summary,Resolved Diabetic Ketoacidosis. Transitioned back to subcutaneous insulin glargine/lispro.

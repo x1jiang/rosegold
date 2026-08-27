@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  rosegold-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rosegold-service:latest
+    container_name: rosegold_platform
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - CUDA_VISIBLE_DEVICES=0
+      - ROSEGOLD_DATA_DIR=/workspace/data
+      - ROSEGOLD_MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
+    ports:
+      - "8000:8000"   # FastAPI Backend
+      - "8501:8501"   # Streamlit Web Dashboard
+    volumes:
+      - ./data:/workspace/data
+      - ./outputs:/workspace/outputs
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["/workspace/start_services.sh"]
