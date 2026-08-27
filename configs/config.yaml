@@ -1,0 +1,61 @@
+# Configuration for Rose Gold LLM Adjudication Pipeline
+
+pipeline:
+  default_condition: "Sepsis / Septic Shock"
+  max_notes_per_visit: 50
+  max_chars_per_note: 4000
+  gpu_memory_utilization: 0.90
+  max_model_len: 32768
+  infer_chunk_size: 32
+  enable_prefix_caching: true
+
+models:
+  lightweight_llama:
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    vram_requirement: "16GB - 24GB (Single GPU: RTX 3090/4090, A10G, L40S, A100)"
+    context_window: 131072
+    tensor_parallel_size: 1
+    quantization: null
+
+  lightweight_gemma:
+    model_name: "google/gemma-2-9b-it"
+    vram_requirement: "18GB - 24GB (Single GPU)"
+    context_window: 8192
+    tensor_parallel_size: 1
+    quantization: null
+
+  muse_glimmer_30b:
+    model_name: "muse-glimmer-30b"
+    vram_requirement: "40GB - 80GB (Single H100 or A100-80GB)"
+    context_window: 65536
+    tensor_parallel_size: 1
+    quantization: null
+
+phenotypes:
+  sepsis:
+    target_condition: "Sepsis / Septic Shock"
+    criteria: |
+      1. Suspected or documented infection.
+      2. Acute organ dysfunction (SOFA increase >= 2, lactate > 2.0, acute AKI, hypoxemia, or altered mental status).
+      3. Septic shock: Persistent hypotension requiring vasopressors (MAP >= 65 mmHg) despite fluid resuscitation.
+
+  stroke:
+    target_condition: "Acute Ischemic Stroke"
+    criteria: |
+      1. Sudden onset focal neurological deficit.
+      2. Confirmatory neuroimaging (CT/MRI showing acute infarct or CTA showing large vessel occlusion).
+      3. Ruling out hemorrhagic stroke, seizure mimic, or metabolic encephalopathy.
+
+  ards:
+    target_condition: "Acute Respiratory Distress Syndrome (ARDS)"
+    criteria: |
+      1. Acute hypoxemic respiratory failure not fully explained by cardiac failure.
+      2. Bilateral opacities on imaging.
+      3. PaO2/FiO2 ratio consistent with ARDS severity thresholds.
+
+  aki:
+    target_condition: "Acute Kidney Injury (AKI)"
+    criteria: |
+      1. Abrupt rise in serum creatinine meeting KDIGO thresholds, or oliguria.
+      2. Exclusion of chronic kidney disease as the sole explanation.
+      3. Documented precipitant (ischemia, pigment, toxin, or sepsis) when available.

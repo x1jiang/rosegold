@@ -1,0 +1,16 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.cpu
+      - -t
+      - gcr.io/$PROJECT_ID/rosegold:latest
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - gcr.io/$PROJECT_ID/rosegold:latest
+images:
+  - gcr.io/$PROJECT_ID/rosegold:latest
+timeout: 1200s
