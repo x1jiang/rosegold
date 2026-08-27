@@ -1,0 +1,6 @@
+row_id,trigger_word,concept,semtypes,start,end,detection,encounter,negation
+101,septic shock,Septic Shock,dsyn,50,62,yes,yes,no
+101,chest pain,Chest Pain,sosy,97,107,yes,yes,yes
+101,nursing,Nursing Home,dsyn,23,30,no,-,-
+102,hernia,Hernia,dsyn,47,53,yes,yes,no
+102,afebrile,Fever,sosy,73,81,yes,yes,yes

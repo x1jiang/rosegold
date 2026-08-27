@@ -14,6 +14,7 @@ import json
 import datetime
 from app.engine import AdjudicationEngine
 from app.omop_loader import load_omop_data
+from app.mimic_ext_notes import looks_like_mimic_ext_notes_path
 from app.concordance import calculate_concordance_metrics
 from app.omop_export import export_to_omop_observation
 from app.config_loader import resolve_criteria
@@ -135,11 +136,24 @@ api_online, health_data = check_api()
 # ---------------------------------------------------------
 st.sidebar.markdown("### ⚙️ Adjudication Controls")
 
-default_notes = os.path.join(PROJECT_ROOT, "data", "synthetic_notes.csv")
-default_visits = os.path.join(PROJECT_ROOT, "data", "synthetic_visits.csv")
+omop_notes = os.path.join(PROJECT_ROOT, "data", "synthetic_notes.csv")
+omop_visits = os.path.join(PROJECT_ROOT, "data", "synthetic_visits.csv")
+mimic_notes = os.path.join(PROJECT_ROOT, "data", "synthetic_mimic_ext_notes", "notes.csv")
+mimic_visits = os.path.join(PROJECT_ROOT, "data", "synthetic_mimic_ext_notes", "omop_visits.csv")
 
-notes_path = st.sidebar.text_input("OMOP NOTE Table", value=default_notes)
-visits_path = st.sidebar.text_input("OMOP VISIT Table", value=default_visits)
+dataset = st.sidebar.selectbox(
+    "Cohort",
+    ["Synthetic OMOP (20 visits)", "Synthetic MIMIC-III-Ext-Notes"],
+)
+if dataset.startswith("Synthetic MIMIC"):
+    default_notes, default_visits = mimic_notes, mimic_visits
+else:
+    default_notes, default_visits = omop_notes, omop_visits
+
+notes_path = st.sidebar.text_input("Notes table", value=default_notes, key=f"notes_{dataset}")
+visits_path = st.sidebar.text_input("Visits table", value=default_visits, key=f"visits_{dataset}")
+if looks_like_mimic_ext_notes_path(notes_path):
+    st.sidebar.caption("Detected MIMIC-III-Ext-Notes notes.csv. Visits are derived from hadm_id.")
 
 target_condition = st.sidebar.selectbox(
     "Target Clinical Phenotype",
@@ -229,7 +243,9 @@ if "custom_criteria" not in st.session_state:
 # Load Cohort
 @st.cache_data
 def load_cohort(n_p, v_p):
-    if os.path.exists(n_p) and os.path.exists(v_p):
+    if not os.path.exists(n_p):
+        return []
+    if looks_like_mimic_ext_notes_path(n_p) or os.path.exists(v_p):
         return load_omop_data(n_p, v_p)
     return []
 
@@ -244,20 +260,19 @@ active_criteria = st.session_state.get("custom_criteria") or resolve_criteria(ta
 
 def adjudicate_record(record, condition, criteria):
     if api_online:
-        try:
-            resp = requests.post(
-                f"{API_BASE_URL}/api/adjudicate/single",
-                json={
-                    "visit_occurrence_id": record.get("visit_occurrence_id"),
-                    "target_condition": condition,
-                    "clinical_criteria": criteria,
-                },
-                timeout=600,
-            )
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
+        resp = requests.post(
+            f"{API_BASE_URL}/api/adjudicate/single",
+            json={
+                "visit_occurrence_id": record.get("visit_occurrence_id"),
+                "person_id": record.get("person_id"),
+                "notes_formatted_text": record.get("notes_formatted_text"),
+                "target_condition": condition,
+                "clinical_criteria": criteria,
+            },
+            timeout=600,
+        )
+        resp.raise_for_status()
+        return resp.json()
     return get_local_engine().adjudicate_single(record, condition, criteria)
 
 

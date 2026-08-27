@@ -52,6 +52,43 @@ The script runs tests, builds `Dockerfile.cpu` via Cloud Build, creates `gs://sb
 
 Synthetic OMOP data only is bundled. Do not mount real PHI to a public service.
 
+## MIMIC-III-Ext-Notes v1.0.0
+
+[MIMIC-III-Ext-Notes](https://physionet.org/content/mimic-iii-ext-notes/1.0.0/) is a credentialed 150-note nursing-note sample with 2,288 clinician-adjudicated concepts (`detection`, `encounter`, `negation`). Rose Gold does not ship the files. After you complete PhysioNet credentialing, CITI training, and the project DUA:
+
+```bash
+python scripts/prepare_mimic_iii_ext_notes.py \
+  --source /path/to/mimic-iii-ext-notes-1.0.0 \
+  --output data/mimic-iii-ext-notes
+
+python -m app.adjudicator \
+  --notes_path data/mimic-iii-ext-notes/omop_notes.csv \
+  --visits_path data/mimic-iii-ext-notes/omop_visits.csv \
+  --target_condition "Sepsis / Septic Shock"
+```
+
+The UI and loader also accept the raw `notes.csv` and derive visits from `hadm_id`. Keep the extract under `data/mimic-iii-ext-notes/` or `data/physionet/` (gitignored). Do not upload it to the public Cloud Run demo.
+
+A synthetic stand-in of that schema is generated from the OMOP demo cohort and shipped in the image:
+
+```bash
+python scripts/simulate_mimic_ext_notes.py \
+  --notes_path data/synthetic_notes.csv \
+  --output data/synthetic_mimic_ext_notes
+```
+
+The UI Cohort selector can switch between `Synthetic OMOP (20 visits)` and `Synthetic MIMIC-III-Ext-Notes`.
+
+Concept-level scoring against `labels.csv`:
+
+```bash
+python scripts/eval_mimic_iii_ext_notes.py \
+  --source data/mimic-iii-ext-notes \
+  --write-prompts outputs/mimic_ext_prompts.jsonl \
+  --phenotype-gold outputs/mimic_ext_sepsis_gold.csv \
+  --predictions outputs/mimic_ext_predictions.csv
+```
+
 ## Tests
 
 ```bash

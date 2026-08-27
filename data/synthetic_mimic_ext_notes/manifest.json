@@ -1,0 +1,11 @@
+{
+  "dataset": "mimic-iii-ext-notes",
+  "version": "1.0.0",
+  "doi": "10.13026/9tfx-yx07",
+  "n_notes": 49,
+  "n_visits": 20,
+  "n_labels": 46,
+  "note_id_source": "row_id",
+  "visit_occurrence_id_source": "hadm_id",
+  "person_id_source": "subject_id"
+}

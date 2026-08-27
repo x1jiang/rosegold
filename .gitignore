@@ -15,3 +15,5 @@ outputs/*
 *.log
 .coverage
 htmlcov/
+data/physionet/
+data/mimic-iii-ext-notes/

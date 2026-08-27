@@ -1,0 +1,3 @@
+row_id,hadm_id,subject_id,text
+101,9001,501,"SYNTHETIC-FIXTURE MICU nursing note. Patient with septic shock on norepinephrine. Patient denies chest pain. SYNTHETIC-FIXTURE"
+102,9002,502,"SYNTHETIC-FIXTURE floor nursing note. Elective hernia repair. Patient is afebrile. SYNTHETIC-FIXTURE"
