@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from app.config_loader import pipeline_settings
+from app.mimic_ext_notes import looks_like_mimic_ext_notes, notes_to_omop
 
 _TABLE_CACHE: Dict[Tuple[Any, ...], pd.DataFrame] = {}
 _RECORD_CACHE: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
@@ -39,18 +40,23 @@ def _read_table(path: str, columns: Optional[Sequence[str]] = None) -> pd.DataFr
     return frame
 
 
-def load_visit_index(notes_path: str, visits_path: str) -> List[Dict[str, Any]]:
+def _chart_tables(notes_path: str, visits_path: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame, Tuple[Any, ...]]:
+    df_notes = _read_table(notes_path)
+    if looks_like_mimic_ext_notes(df_notes):
+        omop_notes, omop_visits = notes_to_omop(df_notes)
+        return omop_notes, omop_visits, (_file_stamp(notes_path), "mimic-ext-notes")
+    if not visits_path:
+        raise FileNotFoundError("OMOP visits_path is required when notes are not MIMIC-III-Ext-Notes")
+    return df_notes, _read_table(visits_path), (_file_stamp(notes_path), _file_stamp(visits_path))
+
+
+def load_visit_index(notes_path: str, visits_path: Optional[str] = None) -> List[Dict[str, Any]]:
     """Visit metadata plus note counts, without materializing note text."""
-    key = (_file_stamp(notes_path), _file_stamp(visits_path))
+    df_notes, df_visits, stamp = _chart_tables(notes_path, visits_path)
+    key = stamp
     cached = _INDEX_CACHE.get(key)
     if cached is not None:
         return cached
-
-    df_visits = _read_table(visits_path)
-    try:
-        df_notes = _read_table(notes_path, columns=["visit_occurrence_id"])
-    except (ValueError, KeyError, OSError):
-        df_notes = _read_table(notes_path)
 
     counts = (
         df_notes.groupby("visit_occurrence_id").size()
@@ -83,19 +89,18 @@ def load_omop_data(
 ) -> List[Dict[str, Any]]:
     """
     Loads OMOP NOTE and VISIT_OCCURRENCE tables, joins and orders notes chronologically per visit.
+    Also accepts MIMIC-III-Ext-Notes notes.csv and derives visits from hadm_id.
     Supports CSV and Parquet files. Caches parsed tables and formatted records by file stamp.
     """
     settings = pipeline_settings()
     max_notes = int(max_notes_per_visit if max_notes_per_visit is not None else settings.get("max_notes_per_visit", 50))
     max_chars = int(max_chars_per_note if max_chars_per_note is not None else settings.get("max_chars_per_note", 4000))
     visit_key = tuple(int(v) for v in target_visits) if target_visits is not None else None
-    cache_key = (_file_stamp(notes_path), _file_stamp(visits_path), visit_key, max_notes, max_chars)
+    df_notes, df_visits, stamp = _chart_tables(notes_path, visits_path)
+    cache_key = (stamp, visit_key, max_notes, max_chars)
     cached = _RECORD_CACHE.get(cache_key)
     if cached is not None:
         return cached
-
-    df_visits = _read_table(visits_path)
-    df_notes = _read_table(notes_path)
 
     if target_visits is not None:
         wanted = set(int(v) for v in target_visits)

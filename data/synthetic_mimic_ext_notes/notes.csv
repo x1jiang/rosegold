@@ -1,0 +1,50 @@
+row_id,hadm_id,subject_id,text
+40001,20001,1001,"74yo F nursing home resident with fever 39.1C, HR 128, BP 76/42 (MAP 53), lactate 4.2. Urosepsis. Starting Norepinephrine. Transfer to MICU."
+40002,20001,1001,Intubated on Levophed 0.14 mcg/kg/min. Blood culture positive for ESBL Klebsiella. Lactate clearing 2.4. AKI with Cr 2.8.
+40003,20001,1001,Severe Sepsis and Septic Shock secondary to Klebsiella urosepsis (Resolved). Completed 7 days IV Cefepime.
+40004,20002,1002,"62yo M admitted for elective right total knee arthroplasty. Normal vitals. WBC 6.1, Cr 0.8."
+40005,20002,1002,Uncomplicated right TKR. Afebrile throughout stay. Incision clean. Discharged home in stable condition.
+40006,20003,1003,"68yo M with acute right hemiplegia and aphasia, NIHSS 18. CTA shows Left M1 MCA occlusion. Administered TNK, emergent thrombectomy TICI 3."
+40007,20003,1003,Acute Ischemic Stroke Left MCA territory. NIHSS improved to 3. Started Apixaban for new atrial fibrillation.
+40008,20004,1004,"55yo M with productive cough, T 38.3C, HR 98, BP 118/74, CXR shows right lower lobe consolidation. Lactate 1.2. Ceftriaxone initiated."
+40009,20004,1004,Uncomplicated CAP. Afebrile 48 hours. No sepsis or organ dysfunction. Discharged home on oral Levofloxacin.
+40010,20005,1005,"29yo M post-MVA with rib fractures. HR 114, WBC 14.8 due to pain/stress. No infection."
+40011,20005,1005,"Blunt chest trauma. Pain controlled, afebrile, normal labs. Discharged home."
+40012,20006,1006,"45yo F with acute respiratory distress, SpO2 82% on RA, bilateral diffuse ground glass opacities. COVID-19 PCR positive."
+40013,20006,1006,Severe ARDS with PaO2/FiO2 ratio 88 mmHg. Paralyzed and placed in prone position for 16 hours. Inhaled Epoprostenol started.
+40014,20006,1006,Acute Respiratory Distress Syndrome (Severe ARDS) successfully weaned from mechanical ventilation. Discharged to rehab.
+40015,20007,1007,"80yo M found down for 18 hours. Serum CK 45,000 U/L, Creatinine 4.6 mg/dL (baseline 1.0), dark tea-colored urine."
+40016,20007,1007,Severe pigment nephropathy AKI KDIGO Stage 3. Aggressive isotonic bicarbonate infusion.
+40017,20007,1007,"Acute Kidney Injury secondary to rhabdomyolysis, renal function recovered without need for hemodialysis (Cr 1.4)."
+40018,20008,1008,"24yo M with RLQ pain, McBurney tenderness, T 37.9C, WBC 15.2. CT abdomen confirms acute suppurative appendicitis."
+40019,20008,1008,Laparoscopic appendectomy performed. Appendix non-perforated.
+40020,20008,1008,Acute simple appendicitis s/p lap appendectomy. Discharged home tolerating regular diet.
+40021,20009,1009,"58yo diabetic M with expanding lower extremity erythema, T 39.4C, HR 122, BP 88/54, WBC 21.0. Blood cultures positive for MSSA."
+40022,20009,1009,MSSA bacteremia secondary to severe cellulitis. Cefazolin 2g IV q8h. Echocardiogram negative for endocarditis.
+40023,20009,1009,MSSA Sepsis with bacteremia and lower extremity cellulitis. Clinical cure.
+40024,20010,1010,"51yo F with sudden 'worst headache of life' (thunderclap), Hunt-Hess 3, Fisher Grade 3 SAH from anterior communicating aneurysm."
+40025,20010,1010,Successful coil embolization of ACoA aneurysm.
+40026,20010,1010,Aneurysmal SAH status post endovascular coiling. Transferred to neuro-rehab.
+40027,20011,1011,"71yo M with 15lb weight gain, orthopnea, bilateral 3+ pitting edema, BNP 3,400 pg/mL, afebrile."
+40028,20011,1011,Acute exacerbation of chronic systolic heart failure (EF 25%). Successfully diuresed with IV Furosemide (total net negative 6L).
+40029,20012,1012,"65yo F s/p sigmoid resection develops new tachycardia HR 135, T 39.2C, BP 82/50, rigid abdomen. CT shows anastomotic dehiscence and free air."
+40030,20012,1012,Post-op septic shock s/p emergent exploratory laparotomy and Hartmann procedure. On Norepinephrine.
+40031,20012,1012,Post-operative intra-abdominal sepsis and septic shock resolved.
+40032,20013,1013,72yo F elective phacoemulsification with intraocular lens placement. Uncomplicated outpatient procedure.
+40033,20014,1014,"60yo M with 20-minute episode of left arm weakness and dysarthria, completely resolved on arrival. MRI brain DWI negative for acute infarct."
+40034,20014,1014,"Transient Ischemic Attack (TIA), ABCD2 score 4. Started on Dual Antiplatelet Therapy (DAPT)."
+40035,20015,1015,"42yo M with severe epigastric pain radiating to back, Lipase 4,800 U/L, SIRS positive, hemoconcentration with Hct 49%."
+40036,20015,1015,Severe gallstone pancreatitis with 30% pancreatic parenchymal necrosis. ICU monitoring for multi-organ failure.
+40037,20015,1015,Severe Acute Pancreatitis (Balthazar E). Organ failure resolved with aggressive hydration.
+40038,20016,1016,"48yo M elective robotic inguinal hernia repair. Uncomplicated recovery, discharged next morning."
+40039,20017,1017,"31yo F with right flank pain, CVA tenderness, T 38.5C, HR 92, BP 112/70. Urine culture positive for E. coli. Lactate normal at 1.1."
+40040,20017,1017,Acute uncomplicated pyelonephritis. Responded to IV Ceftriaxone. No sepsis or hemodynamic instability.
+40041,20018,1018,64yo M anterior STEMI with 100% LAD occlusion. Primary PCI with DES. Hypotension and pulmonary edema. Intra-aortic balloon pump placed.
+40042,20018,1018,"Cardiogenic shock secondary to acute myocardial infarction. Dobutamine infusion. Afebrile, WBC normal, no infection."
+40043,20018,1018,"Acute STEMI complicated by cardiogenic shock, stabilized and weaned off inotropic support."
+40044,20019,1019,"53yo F post-chemotherapy with Absolute Neutrophil Count (ANC) 120 /mcL, T 39.5C, HR 125, BP 84/48. Urgent Cefepime + Vancomycin."
+40045,20019,1019,Neutropenic septic shock. G-CSF support. Blood cultures grew Pseudomonas aeruginosa.
+40046,20019,1019,Pseudomonas neutropenic septic shock resolved with neutrophil recovery.
+40047,20020,1020,"22yo M with Type 1 Diabetes, blood glucose 640 mg/dL, pH 7.12, anion gap 26, beta-hydroxybutyrate > 6.0. Afebrile, chest x-ray clear."
+40048,20020,1020,DKA protocol with IV regular insulin and potassium replacement. Anion gap closed within 14 hours.
+40049,20020,1020,Resolved Diabetic Ketoacidosis. Transitioned back to subcutaneous insulin glargine/lispro.

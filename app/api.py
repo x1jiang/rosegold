@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.schemas import RoseGoldAdjudication
 from app.engine import AdjudicationEngine
 from app.omop_loader import load_omop_data, load_visit_index
+from app.mimic_ext_notes import looks_like_mimic_ext_notes_path
 from app.config_loader import resolve_criteria
 from app.storage import (
     append_audit,
@@ -40,8 +41,8 @@ app.add_middleware(
 )
 
 DATA_DIR = os.path.abspath(os.getenv("ROSEGOLD_DATA_DIR", "data"))
-NOTES_PATH = os.path.join(DATA_DIR, "synthetic_notes.csv")
-VISITS_PATH = os.path.join(DATA_DIR, "synthetic_visits.csv")
+NOTES_PATH = os.path.abspath(os.getenv("ROSEGOLD_NOTES_PATH", os.path.join(DATA_DIR, "synthetic_notes.csv")))
+VISITS_PATH = os.path.abspath(os.getenv("ROSEGOLD_VISITS_PATH", os.path.join(DATA_DIR, "synthetic_visits.csv")))
 
 engine = AdjudicationEngine(
     model_name=os.getenv("ROSEGOLD_MODEL_NAME", "auto")
@@ -138,7 +139,9 @@ def health_check():
 @app.get("/api/visits")
 def get_visits():
     """Returns list of visits available in the configured OMOP dataset."""
-    if not os.path.exists(VISITS_PATH) or not os.path.exists(NOTES_PATH):
+    if not os.path.exists(NOTES_PATH):
+        raise HTTPException(status_code=404, detail="OMOP data files not found.")
+    if not looks_like_mimic_ext_notes_path(NOTES_PATH) and not os.path.exists(VISITS_PATH):
         raise HTTPException(status_code=404, detail="OMOP data files not found.")
     return load_visit_index(NOTES_PATH, VISITS_PATH)
 
@@ -155,19 +158,19 @@ def get_visit_notes(visit_occurrence_id: int):
 @app.post("/api/adjudicate/single", response_model=RoseGoldAdjudication)
 def adjudicate_single_visit(req: SingleAdjudicationRequest):
     """Adjudicates a single visit encounter either by ID or raw notes text."""
-    if req.visit_occurrence_id is not None:
+    if req.notes_formatted_text:
+        record = {
+            "person_id": req.person_id or 1,
+            "visit_occurrence_id": req.visit_occurrence_id or 99999,
+            "visit_start_date": "Unknown",
+            "visit_end_date": "Unknown",
+            "notes_formatted_text": req.notes_formatted_text,
+        }
+    elif req.visit_occurrence_id is not None:
         records = load_omop_data(NOTES_PATH, VISITS_PATH, target_visits=[req.visit_occurrence_id])
         if not records:
             raise HTTPException(status_code=404, detail=f"Visit {req.visit_occurrence_id} not found.")
         record = records[0]
-    elif req.notes_formatted_text:
-        record = {
-            "person_id": req.person_id or 1,
-            "visit_occurrence_id": 99999,
-            "visit_start_date": "2026-01-01",
-            "visit_end_date": "2026-01-05",
-            "notes_formatted_text": req.notes_formatted_text,
-        }
     else:
         raise HTTPException(status_code=400, detail="Must provide either visit_occurrence_id or notes_formatted_text.")
 

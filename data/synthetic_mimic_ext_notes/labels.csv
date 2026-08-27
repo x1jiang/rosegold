@@ -1,0 +1,47 @@
+row_id,trigger_word,concept,semtypes,start,end,detection,encounter,negation
+40001,Urosepsis,Urosepsis,dsyn,87,96,yes,yes,no
+40001,fever,Fever,sosy,34,39,yes,yes,no
+40001,nursing home,Nursing Home,dsyn,7,19,no,-,-
+40002,AKI,Acute Kidney Injury,dsyn,105,108,yes,yes,no
+40003,Septic Shock,Septic Shock,dsyn,18,30,yes,yes,no
+40003,Severe Sepsis,Sepsis,dsyn,0,13,yes,yes,no
+40003,Sepsis,Sepsis,dsyn,7,13,yes,yes,no
+40003,urosepsis,Urosepsis,dsyn,55,64,yes,yes,yes
+40005,Afebrile,Fever,sosy,25,33,yes,yes,yes
+40006,aphasia,Aphasia,sosy,39,46,yes,yes,no
+40006,hemiplegia,Hemiplegia,dsyn,24,34,yes,yes,no
+40007,Acute Ischemic Stroke,Cerebral Infarction,dsyn,0,21,yes,yes,no
+40009,sepsis,Sepsis,dsyn,41,47,yes,yes,yes
+40009,Afebrile,Fever,sosy,19,27,yes,yes,yes
+40011,afebrile,Fever,sosy,37,45,yes,yes,yes
+40012,acute respiratory distress,Respiratory Distress,sosy,12,38,yes,yes,no
+40013,ARDS,"Respiratory Distress Syndrome, Adult",dsyn,7,11,yes,yes,no
+40014,ARDS,"Respiratory Distress Syndrome, Adult",dsyn,44,48,yes,yes,no
+40014,Acute Respiratory Distress,Respiratory Distress,sosy,0,26,yes,yes,no
+40016,AKI,Acute Kidney Injury,dsyn,27,30,yes,yes,no
+40017,Acute Kidney Injury,Acute Kidney Injury,dsyn,0,19,yes,yes,no
+40018,appendicitis,Appendicitis,dsyn,100,112,yes,yes,no
+40020,appendicitis,Appendicitis,dsyn,13,25,yes,yes,no
+40022,bacteremia,Bacteremia,dsyn,5,15,yes,yes,no
+40022,cellulitis,Cellulitis,dsyn,36,46,yes,yes,no
+40023,Sepsis,Sepsis,dsyn,5,11,yes,yes,no
+40023,bacteremia,Bacteremia,dsyn,17,27,yes,yes,no
+40023,cellulitis,Cellulitis,dsyn,48,58,yes,yes,no
+40027,afebrile,Fever,sosy,86,94,yes,yes,yes
+40028,heart failure,Heart Failure,dsyn,39,52,yes,yes,no
+40030,septic shock,Septic Shock,dsyn,8,20,yes,yes,no
+40031,septic shock,Septic Shock,dsyn,42,54,yes,yes,yes
+40031,sepsis,Sepsis,dsyn,31,37,yes,yes,no
+40033,acute infarct,Cerebral Infarction,dsyn,126,139,yes,yes,no
+40034,TIA,Transient Ischemic Attack,dsyn,27,30,yes,yes,no
+40036,pancreatitis,Pancreatitis,dsyn,17,29,yes,yes,no
+40037,Pancreatitis,Pancreatitis,dsyn,13,25,yes,yes,no
+40038,hernia,Hernia,dsyn,33,39,yes,yes,no
+40040,sepsis,Sepsis,dsyn,68,74,yes,yes,yes
+40042,Afebrile,Fever,sosy,81,89,yes,yes,yes
+40042,Cardiogenic shock,Cardiogenic Shock,dsyn,0,17,yes,yes,no
+40043,cardiogenic shock,Cardiogenic Shock,dsyn,27,44,yes,yes,no
+40045,septic shock,Septic Shock,dsyn,12,24,yes,yes,no
+40046,septic shock,Septic Shock,dsyn,24,36,yes,yes,yes
+40047,Afebrile,Fever,sosy,105,113,yes,yes,yes
+40049,Diabetic Ketoacidosis,Diabetic Ketoacidosis,dsyn,9,30,yes,yes,yes

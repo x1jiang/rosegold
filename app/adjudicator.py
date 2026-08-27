@@ -88,8 +88,8 @@ def run_mock_adjudication(records: List[Dict[str, Any]], target_condition: str) 
 
 def main():
     parser = argparse.ArgumentParser(description="Rose Gold Clinical Note Batch Adjudication Pipeline")
-    parser.add_argument("--notes_path", type=str, default="data/synthetic_notes.csv", help="Path to OMOP NOTE CSV/Parquet")
-    parser.add_argument("--visits_path", type=str, default="data/synthetic_visits.csv", help="Path to OMOP VISIT_OCCURRENCE CSV/Parquet")
+    parser.add_argument("--notes_path", type=str, default="data/synthetic_notes.csv", help="Path to OMOP NOTE or MIMIC-III-Ext-Notes notes.csv")
+    parser.add_argument("--visits_path", type=str, default="data/synthetic_visits.csv", help="Path to OMOP VISIT_OCCURRENCE CSV/Parquet (optional for MIMIC-III-Ext-Notes)")
     parser.add_argument("--output_path", type=str, default=default_batch_csv(), help="Path to save adjudication outputs")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="HuggingFace model ID or local weight path")
     parser.add_argument("--target_condition", type=str, default="Sepsis / Septic Shock", help="Condition to adjudicate")
