@@ -79,7 +79,7 @@ echo "✓ Authenticated as: ${ACTIVE:-default}"
 echo ""
 
 echo "🧪 Test gate..."
-"$PYTHON" -m pytest tests/ -q
+"$PYTHON" -m pytest -p no:logfire tests/ -q
 echo ""
 
 echo "🔧 Enabling required APIs (best effort)..."
