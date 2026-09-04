@@ -37,10 +37,27 @@ ENCOUNTER_VALUES = {"yes", "no", "-"}
 NEGATION_VALUES = {"yes", "no", "unsure", "-"}
 
 PHENOTYPE_ALIASES: Dict[str, Tuple[str, ...]] = {
-    "Sepsis / Septic Shock": ("sepsis", "septic shock", "septic"),
-    "Acute Ischemic Stroke": ("stroke", "cerebral infarction", "cerebrovascular accident"),
-    "Acute Respiratory Distress Syndrome (ARDS)": ("ards", "respiratory distress"),
-    "Acute Kidney Injury (AKI)": ("acute kidney injury", "aki", "acute renal failure"),
+    "Sepsis / Septic Shock": ("sepsis", "septic shock", "septic", "septicemia"),
+    "Acute Ischemic Stroke": (
+        "stroke",
+        "cerebral infarction",
+        "cerebrovascular accident",
+        "ischemic stroke",
+        "transient cerebral ischemia",
+    ),
+    "Acute Respiratory Distress Syndrome (ARDS)": (
+        "ards",
+        "respiratory distress",
+        "acute respiratory distress",
+        "respiratory failure",
+    ),
+    "Acute Kidney Injury (AKI)": (
+        "acute kidney injury",
+        "aki",
+        "acute renal failure",
+        "pre-renal acute kidney injury",
+        "kidney failure",
+    ),
 }
 
 
@@ -93,7 +110,11 @@ def validate_notes(frame: pd.DataFrame) -> pd.DataFrame:
     return notes.reset_index(drop=True)
 
 
-def validate_labels(frame: pd.DataFrame, notes: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+def validate_labels(
+    frame: pd.DataFrame,
+    notes: Optional[pd.DataFrame] = None,
+    normalize_undetected: bool = False,
+) -> pd.DataFrame:
     labels = _norm_columns(frame)
     _require_columns(labels, LABEL_COLUMNS, "labels.csv")
     labels = labels.loc[:, list(LABEL_COLUMNS)].copy()
@@ -118,8 +139,12 @@ def validate_labels(frame: pd.DataFrame, notes: Optional[pd.DataFrame] = None) -
         raise MimicExtNotesError("labels.csv negation must be yes, no, unsure, or -")
 
     undetected = labels["detection"] == "no"
-    if ((labels.loc[undetected, "encounter"] != "-") | (labels.loc[undetected, "negation"] != "-")).any():
-        raise MimicExtNotesError("labels.csv detection=no requires encounter='-' and negation='-'")
+    if normalize_undetected:
+        labels.loc[undetected, "encounter"] = "-"
+        labels.loc[undetected, "negation"] = "-"
+    else:
+        if ((labels.loc[undetected, "encounter"] != "-") | (labels.loc[undetected, "negation"] != "-")).any():
+            raise MimicExtNotesError("labels.csv detection=no requires encounter='-' and negation='-'")
 
     if notes is not None:
         known = set(notes["row_id"].tolist())
@@ -286,7 +311,7 @@ def write_omop_bundle(
         "person_id_source": "subject_id",
     }
     if labels is not None:
-        valid_labels = validate_labels(labels, validate_notes(notes))
+        valid_labels = validate_labels(labels, validate_notes(notes), normalize_undetected=True)
         paths["labels"] = os.path.join(output_dir, "labels.csv")
         valid_labels.to_csv(paths["labels"], index=False)
         manifest["n_labels"] = int(len(valid_labels))
@@ -296,7 +321,10 @@ def write_omop_bundle(
     return paths
 
 
-def load_source_bundle(source_dir: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+def load_source_bundle(
+    source_dir: str,
+    normalize_undetected: bool = True,
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     notes_path = os.path.join(source_dir, "notes.csv")
     labels_path = os.path.join(source_dir, "labels.csv")
     if not os.path.isfile(notes_path):
@@ -304,5 +332,9 @@ def load_source_bundle(source_dir: str) -> Tuple[pd.DataFrame, Optional[pd.DataF
     notes = validate_notes(pd.read_csv(notes_path))
     labels = None
     if os.path.isfile(labels_path):
-        labels = validate_labels(pd.read_csv(labels_path), notes)
+        labels = validate_labels(
+            pd.read_csv(labels_path),
+            notes,
+            normalize_undetected=normalize_undetected,
+        )
     return notes, labels
