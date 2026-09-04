@@ -1,31 +1,34 @@
 #!/usr/bin/env bash
 # Rose Gold — Cloud Run deploy
-# Pattern matches note_extraction / cdw_copilot under xjiang2@uth.edu.
 #
 # Prerequisites:
-#   gcloud authenticated as xjiang2@uth.edu
-#   project sbmi-jiang-ai-testing01 (override with PROJECT_ID=...)
+#   gcloud CLI installed and authenticated
+#   GCP project with billing enabled (override with PROJECT_ID=...)
 #
 # Usage:
-#   gcloud auth login xjiang2@uth.edu
-#   ./deploy_to_gcp.sh
+#   gcloud auth login
+#   PROJECT_ID="your-project-id" ./deploy_to_gcp.sh
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PROJECT_ID="${PROJECT_ID:-sbmi-jiang-ai-testing01}"
-REGION="${REGION:-us-central1}"
-SERVICE_NAME="${SERVICE_NAME:-rosegold}"
-ACCOUNT="${ACCOUNT:-xjiang2@uth.edu}"
-IMAGE="gcr.io/${PROJECT_ID}/${SERVICE_NAME}:latest"
-GCS_BUCKET="${GCS_BUCKET:-${PROJECT_ID}-rosegold-data}"
-PYTHON="${PYTHON:-/Users/xiaoqianjiang/anaconda3/bin/python}"
-if [[ ! -x "$PYTHON" ]]; then
-  PYTHON="python3"
+PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
+  echo "❌ No GCP project specified. Please set PROJECT_ID=your-project-id or run 'gcloud config set project <PROJECT_ID>'."
+  exit 1
 fi
 
+REGION="${REGION:-us-central1}"
+SERVICE_NAME="${SERVICE_NAME:-rosegold}"
+ACCOUNT="${ACCOUNT:-$(gcloud config get-value account 2>/dev/null || true)}"
+IMAGE="gcr.io/${PROJECT_ID}/${SERVICE_NAME}:latest"
+GCS_BUCKET="${GCS_BUCKET:-${PROJECT_ID}-rosegold-data}"
+PYTHON="${PYTHON:-python3}"
+
 echo "🚀 Deploying Rose Gold to Google Cloud Run"
-echo "   Account: $ACCOUNT"
+if [[ -n "$ACCOUNT" && "$ACCOUNT" != "(unset)" ]]; then
+  echo "   Account: $ACCOUNT"
+fi
 echo "   Project: $PROJECT_ID"
 echo "   Region:  $REGION"
 echo "   Service: $SERVICE_NAME"
@@ -47,31 +50,32 @@ fi
 if [[ "${DEPLOY_YES:-}" == "1" ]]; then
   echo "DEPLOY_YES=1 — continuing without prompt."
 else
-  read -r -p "Deploy now as ${ACCOUNT} to ${PROJECT_ID}? [y/N] " reply
+  read -r -p "Deploy now to ${PROJECT_ID}? [y/N] " reply
   if [[ ! "${reply}" =~ ^[Yy]$ ]]; then
     echo "Cancelled. When ready:"
-    echo "  gcloud auth login ${ACCOUNT}"
     echo "  ./deploy_to_gcp.sh"
     exit 0
   fi
 fi
 
 echo ""
-echo "👤 Setting gcloud account to ${ACCOUNT}"
-gcloud config set account "$ACCOUNT"
-gcloud config set project "$PROJECT_ID"
+if [[ -n "$ACCOUNT" && "$ACCOUNT" != "(unset)" ]]; then
+  echo "👤 Setting gcloud account to ${ACCOUNT}"
+  gcloud config set account "$ACCOUNT" --quiet 2>/dev/null || true
+fi
+gcloud config set project "$PROJECT_ID" --quiet
 
 ACTIVE="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1 || true)"
-if [[ "$ACTIVE" != "$ACCOUNT" ]]; then
+if [[ -n "$ACCOUNT" && "$ACCOUNT" != "(unset)" && "$ACTIVE" != "$ACCOUNT" ]]; then
   echo "❌ Active account is '${ACTIVE:-none}', expected '${ACCOUNT}'."
-  echo "   Reauthentication is required (UTH tokens expire). Run in your terminal:"
+  echo "   Reauthentication may be required. Run in your terminal:"
   echo "     gcloud auth login ${ACCOUNT}"
   echo "     gcloud config set account ${ACCOUNT}"
   echo "     gcloud config set project ${PROJECT_ID}"
   echo "   Then re-run: ./deploy_to_gcp.sh"
   exit 1
 fi
-echo "✓ Authenticated as: $ACTIVE"
+echo "✓ Authenticated as: ${ACTIVE:-default}"
 echo ""
 
 echo "🧪 Test gate..."
@@ -133,15 +137,17 @@ gcloud run deploy "$SERVICE_NAME" \
   --add-volume-mount="volume=rosegold-data,mount-path=/mnt/gcs" \
   --set-env-vars "ROSEGOLD_DATA_DIR=/workspace/data,ROSEGOLD_MODEL_NAME=auto,ROSEGOLD_API_URL=http://127.0.0.1:8000,ROSEGOLD_OUTPUT_DIR=/mnt/gcs/outputs,ROSEGOLD_AUDIT_LOG=/mnt/gcs/outputs/human_audit_log.jsonl,ROSEGOLD_GCS_BUCKET=${GCS_BUCKET},ROSEGOLD_LLM_BACKEND=llamacpp,ROSEGOLD_LLAMA_REPO=bartowski/Llama-3.2-3B-Instruct-GGUF,ROSEGOLD_LLAMA_GGUF=Llama-3.2-3B-Instruct-Q4_K_M.gguf,ROSEGOLD_MODEL_DIR=/mnt/gcs/models,ROSEGOLD_LOCAL_MODEL_DIR=/tmp/rosegold-models,GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
 
-echo ""
-echo "🔑 Granting ${ACCOUNT} Cloud Run admin on this service..."
-gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
-  --project "$PROJECT_ID" \
-  --region "$REGION" \
-  --member="user:${ACCOUNT}" \
-  --role="roles/run.admin" \
-  --quiet >/dev/null \
-  || echo "⚠️  Could not add IAM binding (may already exist)"
+if [[ -n "$ACCOUNT" && "$ACCOUNT" != "(unset)" ]]; then
+  echo ""
+  echo "🔑 Granting ${ACCOUNT} Cloud Run admin on this service..."
+  gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+    --project "$PROJECT_ID" \
+    --region "$REGION" \
+    --member="user:${ACCOUNT}" \
+    --role="roles/run.admin" \
+    --quiet >/dev/null \
+    || echo "⚠️  Could not add IAM binding (may already exist)"
+fi
 
 SERVICE_URL="$(gcloud run services describe "$SERVICE_NAME" \
   --project "$PROJECT_ID" \

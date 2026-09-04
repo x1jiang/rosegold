@@ -48,7 +48,7 @@ function pass(token) {
 }
 
 function runPytest(nodeid) {
-  const result = run(pythonBin(), ["-m", "pytest", nodeid, "-q"]);
+  const result = run(pythonBin(), ["-m", "pytest", "-p", "no:logfire", nodeid, "-q"]);
   if (result.status !== 0) {
     process.stdout.write(result.stdout || "");
     process.stderr.write(result.stderr || "");
@@ -63,7 +63,7 @@ if (check in pytestCases) {
 }
 
 if (check === "suite") {
-  const result = run(pythonBin(), ["-m", "pytest", "tests/", "-q"]);
+  const result = run(pythonBin(), ["-m", "pytest", "-p", "no:logfire", "tests/", "-q"]);
   process.stdout.write(result.stdout || "");
   process.stderr.write(result.stderr || "");
   if (result.status !== 0) {
