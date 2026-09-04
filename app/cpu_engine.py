@@ -135,74 +135,8 @@ class CPULlamaGemmaEngine:
         return results
 
     def _cpu_rule_adjudicate(self, records: List[Dict[str, Any]], target_condition: str) -> List[Dict[str, Any]]:
-        results = []
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        cond_lower = target_condition.lower()
-
-        for rec in records:
-            text = rec.get('notes_formatted_text', '').lower()
-            
-            if "sepsis" in cond_lower or "septic" in cond_lower:
-                if any(k in text for k in ["septic shock", "lactate 4.2", "norepinephrine", "mssa sepsis", "bacteremia", "urosepsis"]):
-                    status = "CONFIRMED_POSITIVE"
-                    present = True
-                    conf = 0.95
-                    criteria = ["SIRS/qSOFA criteria met", "Confirmed bacterial infection", "Acute organ dysfunction / bacteremia"]
-                    evidence = [{
-                        "note_id": 30001,
-                        "note_date": rec.get('visit_start_date', '2026-03-01'),
-                        "evidence_quote": "Patient admitted with fever, tachycardia, hypotension refractory to initial fluids, elevated lactate.",
-                        "interpretation": "Meets consensus definition for Sepsis / Septic Shock"
-                    }]
-                    rationale = "CPU evaluation: Clear documentation of acute organ dysfunction in setting of severe bacterial infection."
-                else:
-                    status = "CONFIRMED_NEGATIVE"
-                    present = False
-                    conf = 0.98
-                    criteria = []
-                    evidence = []
-                    rationale = f"CPU evaluation: No diagnostic, microbiological, or clinical findings of {target_condition}."
-
-            elif "stroke" in cond_lower or "infarct" in cond_lower:
-                if any(k in text for k in ["stroke", "nihss", "m1 mca", "occlusion", "infarct"]):
-                    status = "CONFIRMED_POSITIVE"
-                    present = True
-                    conf = 0.96
-                    criteria = ["Sudden focal neurologic deficit", "Angiographic confirmed large vessel occlusion", "Thrombectomy / Thrombolysis performed"]
-                    evidence = [{
-                        "note_id": 30006,
-                        "note_date": rec.get('visit_start_date', '2026-03-10'),
-                        "evidence_quote": "CT Angiogram: Dense occlusion of the proximal left M1 segment of MCA.",
-                        "interpretation": "Direct proof of acute ischemic stroke"
-                    }]
-                    rationale = "CPU evaluation: Acute ischemic stroke confirmed by neuroimaging and interventions."
-                else:
-                    status = "CONFIRMED_NEGATIVE"
-                    present = False
-                    conf = 0.99
-                    criteria = []
-                    evidence = []
-                    rationale = "CPU evaluation: No clinical or radiological evidence of acute cerebral infarction."
-            else:
-                status = "CONFIRMED_NEGATIVE"
-                present = False
-                conf = 0.90
-                criteria = []
-                evidence = []
-                rationale = f"CPU evaluation: No indicators for {target_condition} found."
-
-            results.append({
-                "person_id": rec['person_id'],
-                "visit_occurrence_id": rec['visit_occurrence_id'],
-                "condition_present": present,
-                "phenotype_status": status,
-                "confidence_score": conf,
-                "primary_criteria_met": criteria,
-                "key_evidence": evidence,
-                "clinical_rationale": rationale,
-                "adjudication_timestamp": timestamp
-            })
-        return results
+        from app.clinical_rules import adjudicate_clinical_rules
+        return adjudicate_clinical_rules(records, target_condition, backend_tag="cpu_rules")
 
     def _fallback_record(self, rec: Dict[str, Any], err_msg: str, timestamp: str) -> Dict[str, Any]:
         return {

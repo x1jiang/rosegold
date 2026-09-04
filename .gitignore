@@ -17,5 +17,7 @@ outputs/*
 htmlcov/
 data/physionet/
 data/mimic-iii-ext-notes/
+mimic-iii-ext-notes*
+*.zip
 scripts/open_outlook_draft*
 *.applescript
