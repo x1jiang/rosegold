@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def _extract_note_spans(text: str, default_visit_id: int = 0, default_date: str = "") -> List[Tuple[str, int, str]]:
-    """Parse formatted notes text into lines tagged with note_id and note_date."""
+    """Parse formatted notes text into lines/blocks tagged with note_id and note_date."""
     lines = text.split("\n")
     tagged = []
     cur_id = default_visit_id
@@ -33,6 +33,18 @@ def _extract_note_spans(text: str, default_visit_id: int = 0, default_date: str 
     return tagged
 
 
+def _make_snippet(text: str, match_start: int, match_end: int) -> str:
+    """Extract an evidence snippet centered around the match trigger."""
+    start = max(0, match_start - 50)
+    end = min(len(text), match_end + 70)
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(text):
+        snippet = snippet + "..."
+    return snippet
+
+
 def _check_sepsis(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float, List[str], List[Dict[str, Any]], str]:
     pos_patterns = [
         r"septic\s+shock",
@@ -42,17 +54,20 @@ def _check_sepsis(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float
         r"septicemia",
         r"bacteremia",
         r"sepsis",
-        r"lactate\s+(?:4\.[0-9]|[5-9]\.[0-9]|[1-9]\d)",
-        r"norepinephrine",
     ]
     neg_patterns = [
-        r"\bno\s+(?:evidence\s+of\s+)?(?:signs\s+of\s+)?(?:sepsis|septic|infection|bacteremia)\b",
+        r"\bno\s+(?:evidence\s+of\s+)?(?:signs?\s+of\s+)?(?:sepsis|septic|infection|bacteremia)\b",
         r"\brule\s+out\s+(?:sepsis|septic)\b",
         r"\br/o\s+(?:sepsis|septic)\b",
         r"\bunlikely\s+(?:sepsis|septic)\b",
-        r"\bwithout\s+(?:signs\s+of\s+)?sepsis\b",
+        r"\bwithout\s+(?:signs?\s+of\s+)?(?:sepsis|septic)\b",
         r"\bnot\s+septic\b",
+        r"\beval\s+for\s+septic\s+emboli\b",
+        r"\bno\s+sign\s+of\s+septic\s+emboli\b",
+        r"\bconcern\s+(?:for|of)\s+sepsis\b",
         r"\buncomplicated\s+(?:cap|pneumonia|pyelonephritis|uti)\b",
+        r"\bsent\s+to\s+.*\s+with\s+urosepsis\b",
+        r"\bprior\s+to\s+transfer\b.*(?:sepsis|urosepsis)",
     ]
 
     evidence = []
@@ -62,14 +77,15 @@ def _check_sepsis(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float
             m = re.search(r"\b" + pat + r"\b", line_lower)
             if m:
                 idx = m.start()
-                win = line_lower[max(0, idx - 60):min(len(line_lower), idx + 60)]
+                win = line_lower[max(0, idx - 70):min(len(line_lower), idx + 70)]
                 if any(re.search(np, win) for np in neg_patterns):
                     continue
+                snippet = _make_snippet(line, m.start(), m.end())
                 evidence.append({
                     "note_id": nid,
                     "note_date": ndate,
-                    "evidence_quote": line[:220],
-                    "interpretation": f"Acute infection and systemic organ dysfunction: {pat}",
+                    "evidence_quote": snippet,
+                    "interpretation": f"Acute systemic infection / sepsis criteria: {pat}",
                 })
                 break
 
@@ -102,38 +118,59 @@ def _check_stroke(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float
         r"m1\s+mca\s+occlusion",
         r"nihss\b",
         r"mechanical\s+thrombectomy",
+        r"following\s+cva",
+        r"r/t\s+stroke",
+        r"hemorrhagic\s+cva",
         r"stroke\b",
         r"cva\b",
     ]
     neg_patterns = [
+        r"ischemic\s+cardiomyopathy",
+        r"ischemic\s+heart",
+        r"ischemic\s+colitis",
+        r"ischemic\s+bowel",
+        r"myocardial\s+infarction",
+        r"\bmi\b",
+        r"negative\s+for\s+.*?(?:stroke|infarct|cva)",
+        r"without\s+(?:evidence\s+of\s+)?(?:acute\s+)?stroke",
         r"no\s+(?:evidence\s+of\s+)?(?:acute\s+)?stroke",
-        r"rule\s+out\s+(?:acute\s+)?stroke",
-        r"r/o\s+(?:acute\s+)?stroke",
         r"no\s+acute\s+(?:intracranial\s+)?infarct",
-        r"negative\s+for\s+acute\s+infarct",
+        r"no\s+history\s+of\s+.*?(?:cva|stroke)",
+        r"r/o\s+.*?(?:stroke|cva)",
+        r"rule\s+out\s+.*?(?:stroke|cva)",
+        r"(?:brother|sister|mother|father|family)\s+(?:with|history).*?(?:cva|stroke)",
+        r"s/p\s+cva",
+        r"cva\s+in\s+\[?\*\*?\d+",
+        r"had\s+cva\s+in\s+past",
         r"history\s+of\s+(?:prior\s+)?(?:stroke|cva)",
+        r"prior\s+(?:stroke|cva)",
         r"pmh(?:x)?\s*:.*?(?:stroke|cva)",
         r"past\s+medical\s+history\s*:.*?(?:stroke|cva)",
-        r"prior\s+(?:stroke|cva)",
+        r"with\s+tbi\s+and\s+cva",
+        r"since\s+cva",
         r"hx\s+(?:of\s+)?(?:stroke|cva)",
-        r"myocardial\s+infarction",
-        r"mi\b",
+        r"old\s+(?:stroke|cva)",
+        r"remote\s+(?:stroke|cva)",
+        r"cva\s+with\s+left\s+sided\s+weakness",
     ]
 
     evidence = []
     for line, nid, ndate in tagged_lines:
         line_lower = line.lower()
+        if any(np in line_lower for np in ["ischemic cardiomyopathy", "ischemic heart", "ischemic colitis", "ischemic bowel"]):
+            continue
         for pat in pos_patterns:
             m = re.search(r"\b" + pat + r"\b", line_lower)
             if m:
                 idx = m.start()
-                win = line_lower[max(0, idx - 70):min(len(line_lower), idx + 70)]
+                win = line_lower[max(0, idx - 80):min(len(line_lower), idx + 110)]
                 if any(re.search(np, win) for np in neg_patterns):
                     continue
+                snippet = _make_snippet(line, m.start(), m.end())
                 evidence.append({
                     "note_id": nid,
                     "note_date": ndate,
-                    "evidence_quote": line[:220],
+                    "evidence_quote": snippet,
                     "interpretation": f"Acute focal neurological deficit / neuroimaging confirmation: {pat}",
                 })
                 break
@@ -182,10 +219,11 @@ def _check_ards(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float, 
                 win = line_lower[max(0, idx - 60):min(len(line_lower), idx + 60)]
                 if any(re.search(np, win) for np in neg_patterns):
                     continue
+                snippet = _make_snippet(line, m.start(), m.end())
                 evidence.append({
                     "note_id": nid,
                     "note_date": ndate,
-                    "evidence_quote": line[:220],
+                    "evidence_quote": snippet,
                     "interpretation": f"Acute hypoxemic respiratory failure / distress: {pat}",
                 })
                 break
@@ -213,7 +251,10 @@ def _check_aki(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float, L
         r"\baki\b",
         r"acute\s+renal\s+failure",
         r"pre-renal\s+acute\s+kidney\s+injury",
-        r"kidney\s+failure",
+        r"pre-renal\s+azotemia",
+        r"acute\s+tubular\s+necrosis",
+        r"\batn\b",
+        r"renal\s+failure\s+post\s+cath",
         r"creatinine\s+(?:elevated|rise|rising)",
         r"oliguria",
     ]
@@ -234,10 +275,11 @@ def _check_aki(tagged_lines: List[Tuple[str, int, str]]) -> Tuple[bool, float, L
                 win = line_lower[max(0, idx - 60):min(len(line_lower), idx + 60)]
                 if any(re.search(np, win) for np in neg_patterns):
                     continue
+                snippet = _make_snippet(line, m.start(), m.end())
                 evidence.append({
                     "note_id": nid,
                     "note_date": ndate,
-                    "evidence_quote": line[:220],
+                    "evidence_quote": snippet,
                     "interpretation": f"Acute renal impairment: {pat}",
                 })
                 break
@@ -266,7 +308,7 @@ def adjudicate_clinical_rules(
 ) -> List[Dict[str, Any]]:
     """
     Executes rule-based clinical adjudication across OMOP records with
-    comprehensive concept matching, negation filtering, and dynamic quote extraction.
+    comprehensive concept matching, negation filtering, and centered quote extraction.
     """
     results = []
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
