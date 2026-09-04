@@ -183,6 +183,7 @@ llm_backend = st.sidebar.selectbox(
     "Inference Engine & Model",
     [
         "Auto-Select for Hardware (Recommended)",
+        "Rose Gold Hybrid (Rules + Muse GPU)",
         "Llama 3.1 8B-Instruct (GPU / vLLM)",
         "Llama 3.2 3B-Instruct (CPU Lightweight)",
         "Gemma 2 9B-Instruct (GPU)",
@@ -196,6 +197,9 @@ llm_backend = st.sidebar.selectbox(
 if "Auto-Select" in llm_backend:
     resolved = resolve_model_and_engine(requested_family="llama")
     st.sidebar.caption(f"⚡ Active: **{resolved['selected_model']}** on {resolved['target_device'].upper()}")
+elif "Hybrid" in llm_backend:
+    resolved = resolve_model_and_engine(requested_model="muse-glimmer-30b", force_device="cuda")
+    st.sidebar.caption(f"⚡ Active: **Rose Gold Hybrid (Rules + Muse-30B)**")
 elif "3.2 3B" in llm_backend:
     resolved = resolve_model_and_engine(requested_model="meta-llama/Llama-3.2-3B-Instruct", force_device="cpu")
 elif "2B" in llm_backend:
