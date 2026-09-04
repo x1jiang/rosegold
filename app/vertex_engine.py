@@ -20,7 +20,7 @@ def _project_id() -> str:
         os.getenv("GOOGLE_CLOUD_PROJECT")
         or os.getenv("ROSEGOLD_GCP_PROJECT")
         or os.getenv("GCP_PROJECT")
-        or "sbmi-jiang-ai-testing01"
+        or ""
     )
 
 

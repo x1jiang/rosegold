@@ -31,8 +31,73 @@ python -m app.adjudicator \
   --target_condition "Sepsis / Septic Shock"
 ```
 
-## GPU / hospital firewall
+## Docker & Container Deployment
 
+### Rootless Docker (Recommended for Hospital Firewalls & Multi-User Servers)
+
+Rootless Docker runs both the Docker daemon and containers inside an unprivileged user namespace, complying with clinical and enterprise security restrictions without requiring `root` or `sudo` access.
+
+#### 1. Setup Rootless Environment
+Ensure the rootless daemon is active and your shell points to the user socket:
+```bash
+# Start user daemon (systemd)
+systemctl --user start docker
+systemctl --user enable docker
+
+# Point Docker CLI to the rootless socket
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+```
+
+#### 2. Run CPU Container (Zero-Install, Fast Cold-Start)
+```bash
+# Create local outputs folder with host user write permissions
+mkdir -p outputs
+
+# Build the CPU-optimized image
+docker build -f Dockerfile.cpu -t rosegold:cpu .
+
+# Run with rootless volume mounts and unprivileged port 8080
+docker run -d \
+  --name rosegold \
+  -p 8080:8080 \
+  -v "$(pwd)/data:/workspace/data:ro" \
+  -v "$(pwd)/outputs:/workspace/outputs:rw" \
+  rosegold:cpu
+```
+Open **http://localhost:8080** in your browser.
+
+#### 3. Run with Docker Compose (Rootless)
+```bash
+mkdir -p outputs
+docker compose up --build
+```
+- API Docs: http://localhost:8000/docs
+- Streamlit UI: http://localhost:8501
+
+#### 4. Rootless GPU (vLLM on NVIDIA Hardware)
+If running on an unprivileged GPU node with the NVIDIA Container Toolkit (v1.14+), generate the Container Device Interface (CDI) spec:
+```bash
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+# Run container with CDI GPU passthrough
+docker run --gpus all -p 8000:8000 -p 8501:8501 rosegold:latest
+```
+
+#### 5. Rootless Podman (Drop-in Alternative)
+For Red Hat Enterprise Linux, Rocky Linux, or Fedora clusters:
+```bash
+mkdir -p outputs
+podman build -f Dockerfile.cpu -t rosegold:cpu .
+podman run -d \
+  --name rosegold \
+  -p 8080:8080 \
+  -v ./data:/workspace/data:ro,Z \
+  -v ./outputs:/workspace/outputs:rw,Z \
+  rosegold:cpu
+```
+*(The `:Z` flag configures SELinux volume relabeling automatically).*
+
+### Standard GPU Deployment
+For dedicated root or server environments with CUDA:
 Use `Dockerfile` (vLLM base) and `docker-compose.yml`. Optional CPU weights:
 
 ```bash
@@ -41,14 +106,21 @@ export ROSEGOLD_LOAD_CPU_WEIGHTS=1
 
 ## Cloud Run (CPU, quick load)
 
-Same pattern as `note_extraction` / `cdw_copilot`: account `xjiang2@uth.edu`, project `sbmi-jiang-ai-testing01`.
+Deploy the turnkey container to Google Cloud Run:
 
 ```bash
-gcloud auth login xjiang2@uth.edu
+# Authenticate and select your target GCP project
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+
+# Run the automated deployment script
 ./deploy_to_gcp.sh
 ```
 
-The script runs tests, builds `Dockerfile.cpu` via Cloud Build, creates `gs://sbmi-jiang-ai-testing01-rosegold-data`, mounts it at `/mnt/gcs`, deploys Cloud Run, grants you admin, and smoke-tests Streamlit. Annotations, criteria, and batch exports persist under `gs://…/outputs`. Override with `PROJECT_ID=... REGION=... SERVICE_NAME=... GCS_BUCKET=...` if needed.
+The script runs tests, builds `Dockerfile.cpu` via Cloud Build, provisions `gs://${PROJECT_ID}-rosegold-data`, mounts it at `/mnt/gcs`, deploys Cloud Run, configures IAM roles, and smoke-tests Streamlit. Annotations, criteria, and batch exports persist under `gs://${PROJECT_ID}-rosegold-data/outputs`. Override defaults with:
+```bash
+PROJECT_ID=my-project REGION=us-central1 SERVICE_NAME=rosegold GCS_BUCKET=my-bucket ./deploy_to_gcp.sh
+```
 
 Synthetic OMOP data only is bundled. Do not mount real PHI to a public service.
 

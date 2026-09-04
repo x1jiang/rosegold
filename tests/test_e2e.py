@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import requests
 import json
@@ -12,14 +13,19 @@ def test_full_pipeline_e2e():
     env["ROSEGOLD_AUDIT_LOG"] = "outputs/human_audit_log.jsonl"
     
     server_process = subprocess.Popen(
-        ["/Users/xiaoqianjiang/anaconda3/bin/python", "-m", "uvicorn", "app.api:app", "--port", "8008", "--host", "127.0.0.1"],
+        [sys.executable, "-m", "uvicorn", "app.api:app", "--port", "8008", "--host", "127.0.0.1"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )
     
     base_url = "http://127.0.0.1:8008"
-    time.sleep(2) # Allow server to bind
+    for _ in range(30):
+        try:
+            if requests.get(f"{base_url}/health", timeout=0.5).status_code == 200:
+                break
+        except Exception:
+            time.sleep(0.3)
 
     try:
         # Step 1: Health Check
