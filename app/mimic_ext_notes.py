@@ -194,9 +194,13 @@ def notes_to_omop(notes: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return omop_notes, visits
 
 
-def join_labels(notes: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
+def join_labels(
+    notes: pd.DataFrame,
+    labels: pd.DataFrame,
+    normalize_undetected: bool = False,
+) -> pd.DataFrame:
     valid_notes = validate_notes(notes)
-    valid_labels = validate_labels(labels, valid_notes)
+    valid_labels = validate_labels(labels, valid_notes, normalize_undetected=normalize_undetected)
     return valid_labels.merge(valid_notes, on="row_id", how="left")
 
 
@@ -204,8 +208,9 @@ def phenotype_gold(
     notes: pd.DataFrame,
     labels: pd.DataFrame,
     target_condition: str,
+    normalize_undetected: bool = True,
 ) -> pd.DataFrame:
-    merged = join_labels(notes, labels)
+    merged = join_labels(notes, labels, normalize_undetected=normalize_undetected)
     aliases = PHENOTYPE_ALIASES.get(target_condition, (target_condition.lower(),))
     concept = merged["concept"].str.lower()
     hit = pd.Series(False, index=merged.index)
