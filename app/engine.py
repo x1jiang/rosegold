@@ -21,9 +21,13 @@ def _want_vertex() -> bool:
     return _backend_name() in {"vertex", "gemini"}
 
 
+def _want_hybrid() -> bool:
+    return _backend_name() in {"hybrid", "rosegold_hybrid", "muse_hybrid"}
+
+
 def _want_llamacpp() -> bool:
     backend = _backend_name()
-    if backend in {"mock", "keyword", "rules", "vertex", "gemini"}:
+    if backend in {"mock", "keyword", "rules", "vertex", "gemini", "hybrid", "rosegold_hybrid", "muse_hybrid"}:
         return False
     if backend in {"llama", "llamacpp", "llama.cpp", "gguf"}:
         return True
@@ -59,6 +63,7 @@ class AdjudicationEngine:
         self.cpu_engine = None
         self.vertex_engine = None
         self.llama_engine = None
+        self.hybrid_engine = None
         self.is_vllm_available = False
         self._backend_initialized = False
         self.backend_error = None
@@ -74,6 +79,12 @@ class AdjudicationEngine:
             return {
                 "backend": "llamacpp",
                 "model_name": self.llama_engine.model_name,
+                "llm_real": True,
+            }
+        if self.hybrid_engine is not None:
+            return {
+                "backend": "hybrid",
+                "model_name": f"Hybrid (Rules + {self.hybrid_engine.model_name})",
                 "llm_real": True,
             }
         if self.vertex_engine is not None:
@@ -164,6 +175,23 @@ class AdjudicationEngine:
             not self.is_vllm_available
             and self.cpu_engine is None
             and self.llama_engine is None
+            and self.vertex_engine is None
+            and _want_hybrid()
+        ):
+            try:
+                from app.hybrid_engine import HybridAdjudicationEngine
+
+                self.hybrid_engine = HybridAdjudicationEngine()
+                self.model_name = f"hybrid:{self.hybrid_engine.model_name}"
+                print(f"[Engine] Hybrid Engine ready: {self.model_name}")
+            except Exception as e:
+                print(f"[Engine] Hybrid Engine init failed ({e}).")
+                self.backend_error = str(e)
+
+        if (
+            not self.is_vllm_available
+            and self.cpu_engine is None
+            and self.llama_engine is None
             and _want_vertex()
         ):
             try:
@@ -196,6 +224,8 @@ class AdjudicationEngine:
         self._init_backend()
         if self.is_vllm_available and self.llm is not None:
             return self._vllm_adjudicate(records, target_condition, clinical_criteria)
+        if self.hybrid_engine is not None:
+            return self.hybrid_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.cpu_engine is not None:
             return self.cpu_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.llama_engine is not None:
