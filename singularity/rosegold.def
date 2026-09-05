@@ -1,0 +1,39 @@
+Bootstrap: docker
+From: vllm/vllm-openai:latest
+
+%help
+    Rose Gold Clinical Adjudication (GPU Singularity/Apptainer Container)
+    Includes vLLM high-throughput inference engine, FastAPI, and Streamlit.
+    Run with '--nv' flag on GPU nodes.
+
+%files
+    requirements.txt /workspace/requirements.txt
+    app /workspace/app
+    configs /workspace/configs
+    data /workspace/data
+    start_services.sh /workspace/start_services.sh
+
+%environment
+    export LC_ALL=C
+    export PYTHONUNBUFFERED=1
+    export ROSEGOLD_DATA_DIR=/workspace/data
+    export ROSEGOLD_OUTPUT_DIR=/workspace/outputs
+    export ROSEGOLD_LLM_BACKEND=vllm
+
+%post
+    pip install --no-cache-dir \
+        fastapi>=0.110.0 \
+        uvicorn>=0.28.0 \
+        streamlit>=1.35.0 \
+        pydantic>=2.7.0 \
+        pandas>=2.2.0 \
+        pyarrow>=15.0.0 \
+        pyyaml>=6.0.1 \
+        requests>=2.31.0 \
+        outlines>=0.0.46 \
+        xgrammar
+    chmod +x /workspace/start_services.sh
+    mkdir -p /workspace/outputs /workspace/data
+
+%runscript
+    exec /workspace/start_services.sh "$@"

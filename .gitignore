@@ -21,3 +21,5 @@ mimic-iii-ext-notes*
 *.zip
 scripts/open_outlook_draft*
 *.applescript
+.loopx/
+.codex/
