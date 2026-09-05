@@ -7,6 +7,7 @@ import time
 from playwright.sync_api import sync_playwright
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "https://rosegold-eoohrvwf7q-uc.a.run.app/"
+ADJUDICATION_TIMEOUT_MS = int(sys.argv[2]) if len(sys.argv) > 2 else 600000
 
 
 def main() -> int:
@@ -18,7 +19,8 @@ def main() -> int:
         print("sidebar_gcs_ok")
 
         page.get_by_role("button", name="Adjudicate this Encounter").click()
-        page.get_by_role("button", name="Sign & Save Verification").wait_for(timeout=60000)
+        # CPU llama.cpp takes ~90-120s per visit on 4 vCPUs; match the UI's 600s request timeout.
+        page.get_by_role("button", name="Sign & Save Verification").wait_for(timeout=ADJUDICATION_TIMEOUT_MS)
         print("adjudicate_ok")
 
         comments = page.get_by_label("Clinical Review Comments")
