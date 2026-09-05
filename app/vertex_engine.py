@@ -1,14 +1,21 @@
-"""Vertex Gemini adjudication for Cloud Run / GCP (real hosted LLM)."""
+"""Vertex Gemini adjudication for Cloud Run / GCP (real hosted LLM).
+
+One malformed or failed model response yields an INDETERMINATE record for that
+visit; it never aborts the rest of the batch.
+"""
 
 from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
 
 from app.prompts import SYSTEM_PROMPT, build_adjudication_prompt
 from app.schemas import RoseGoldAdjudication
+
+logger = logging.getLogger("rosegold.vertex")
 
 
 def _default_model() -> str:
@@ -89,18 +96,32 @@ class VertexGeminiEngine:
                 visit_end=rec.get("visit_end_date", "Unknown"),
                 notes_formatted_text=rec["notes_formatted_text"],
             )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.0,
-                    response_mime_type="application/json",
-                    response_schema=RoseGoldAdjudication,
-                ),
-            )
-            parsed = _parse_model_json(response.text)
-            payload = parsed.model_dump()
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.0,
+                        response_mime_type="application/json",
+                        response_schema=RoseGoldAdjudication,
+                    ),
+                )
+                parsed = _parse_model_json(response.text)
+                payload = parsed.model_dump()
+            except Exception as exc:
+                # Log the failure class only; the prompt contains clinical text.
+                logger.warning(
+                    "Vertex adjudication failed for visit %s: %s", rec.get("visit_occurrence_id"), type(exc).__name__
+                )
+                payload = {
+                    "clinical_rationale": f"Vertex response unavailable or unparsable ({type(exc).__name__}).",
+                    "primary_criteria_met": [],
+                    "key_evidence": [],
+                    "phenotype_status": "INDETERMINATE_INSUFFICIENT_DATA",
+                    "condition_present": False,
+                    "confidence_score": 0.0,
+                }
             payload["person_id"] = rec["person_id"]
             payload["visit_occurrence_id"] = rec["visit_occurrence_id"]
             payload["adjudication_timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()

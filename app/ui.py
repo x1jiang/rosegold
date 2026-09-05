@@ -19,6 +19,7 @@ from app.concordance import calculate_concordance_metrics
 from app.omop_export import export_to_omop_observation
 from app.config_loader import resolve_criteria
 from app.model_selector import detect_hardware, resolve_model_and_engine
+from app.paths import UnsafePathError, data_dir, resolve_data_file
 from app.storage import (
     append_audit,
     load_batch_results,
@@ -128,7 +129,7 @@ def _api_headers():
 @st.cache_data(ttl=5)
 def check_api():
     try:
-        r = requests.get(f"{API_BASE_URL}/health", timeout=1.2)
+        r = requests.get(f"{API_BASE_URL}/health", headers=_api_headers(), timeout=1.2)
         if r.status_code == 200:
             return True, r.json()
     except Exception:
@@ -137,15 +138,32 @@ def check_api():
 
 api_online, health_data = check_api()
 
+
+def _api_error_message(resp) -> str:
+    """Short, non-sensitive summary of an API error for the dashboard."""
+    rid = resp.headers.get("x-request-id", "")
+    suffix = f" (request id `{rid}`)" if rid else ""
+    if resp.status_code == 503:
+        return f"The adjudication backend is not ready yet{suffix}. Check `/ready` or the service logs."
+    if resp.status_code == 401:
+        return "The API rejected the dashboard's credentials. Set ROSEGOLD_API_KEY for both processes."
+    if resp.status_code == 429:
+        return "The API is rate-limiting requests. Wait a moment and retry."
+    return f"The API returned HTTP {resp.status_code}{suffix}."
+
 # ---------------------------------------------------------
 # Sidebar Navigation & Settings
 # ---------------------------------------------------------
 st.sidebar.markdown("### ⚙️ Adjudication Controls")
 
-omop_notes = os.path.join(PROJECT_ROOT, "data", "synthetic_notes.csv")
-omop_visits = os.path.join(PROJECT_ROOT, "data", "synthetic_visits.csv")
-mimic_notes = os.path.join(PROJECT_ROOT, "data", "synthetic_mimic_ext_notes", "notes.csv")
-mimic_visits = os.path.join(PROJECT_ROOT, "data", "synthetic_mimic_ext_notes", "omop_visits.csv")
+# Dataset paths typed into the sidebar are validated against ROSEGOLD_DATA_DIR
+# exactly like the API's notes_path/visits_path: the dashboard is the public
+# surface on Cloud Run and must not be able to read arbitrary files.
+DATA_ROOT = data_dir() if os.getenv("ROSEGOLD_DATA_DIR") else os.path.join(PROJECT_ROOT, "data")
+omop_notes = os.path.join(DATA_ROOT, "synthetic_notes.csv")
+omop_visits = os.path.join(DATA_ROOT, "synthetic_visits.csv")
+mimic_notes = os.path.join(DATA_ROOT, "synthetic_mimic_ext_notes", "notes.csv")
+mimic_visits = os.path.join(DATA_ROOT, "synthetic_mimic_ext_notes", "omop_visits.csv")
 
 dataset = st.sidebar.selectbox(
     "Cohort",
@@ -156,10 +174,34 @@ if dataset.startswith("Synthetic MIMIC"):
 else:
     default_notes, default_visits = omop_notes, omop_visits
 
-notes_path = st.sidebar.text_input("Notes table", value=default_notes, key=f"notes_{dataset}")
-visits_path = st.sidebar.text_input("Visits table", value=default_visits, key=f"visits_{dataset}")
-if looks_like_mimic_ext_notes_path(notes_path):
+notes_path_input = st.sidebar.text_input("Notes table", value=default_notes, key=f"notes_{dataset}")
+visits_path_input = st.sidebar.text_input("Visits table", value=default_visits, key=f"visits_{dataset}")
+st.sidebar.caption(f"Files must be `.csv`/`.parquet` inside `{DATA_ROOT}`.")
+
+try:
+    notes_path = resolve_data_file(notes_path_input, root=DATA_ROOT)
+except UnsafePathError:
+    st.sidebar.error("Notes table must be a .csv/.parquet file inside the configured data directory.")
+    st.stop()
+
+visits_path = None
+if (visits_path_input or "").strip():
+    try:
+        visits_path = resolve_data_file(visits_path_input, root=DATA_ROOT)
+    except UnsafePathError:
+        visits_path = None
+
+try:
+    notes_is_mimic = looks_like_mimic_ext_notes_path(notes_path)
+except Exception:
+    st.sidebar.error("Notes table could not be read. Check that it is a valid CSV/Parquet file.")
+    st.stop()
+
+if notes_is_mimic:
     st.sidebar.caption("Detected MIMIC-III-Ext-Notes notes.csv. Visits are derived from hadm_id.")
+elif visits_path is None:
+    st.sidebar.error("Visits table must be a .csv/.parquet file inside the configured data directory.")
+    st.stop()
 
 target_condition = st.sidebar.selectbox(
     "Target Clinical Phenotype",
@@ -255,11 +297,16 @@ if "custom_criteria" not in st.session_state:
 def load_cohort(n_p, v_p):
     if not os.path.exists(n_p):
         return []
-    if looks_like_mimic_ext_notes_path(n_p) or os.path.exists(v_p):
+    if looks_like_mimic_ext_notes_path(n_p) or (v_p and os.path.exists(v_p)):
         return load_omop_data(n_p, v_p)
     return []
 
-records = load_cohort(notes_path, visits_path)
+try:
+    records = load_cohort(notes_path, visits_path)
+except Exception:
+    # Malformed CSV/Parquet: keep the traceback in the server log, not the browser.
+    st.error("The selected dataset could not be parsed. Check that it follows the OMOP NOTE / VISIT_OCCURRENCE schema.")
+    st.stop()
 
 if not records:
     st.error("No OMOP data found. Please check data file paths.")
@@ -269,25 +316,42 @@ active_criteria = st.session_state.get("custom_criteria") or resolve_criteria(ta
 
 
 def adjudicate_record(record, condition, criteria):
+    """Adjudicate one visit. Returns None (after showing an error) instead of raising.
+
+    When the API is online its answer is authoritative; the dashboard never
+    silently substitutes an in-process engine for a failed API call, because
+    that could turn a configured LLM deployment into keyword-rule labels.
+    """
     if api_online:
-        resp = requests.post(
-            f"{API_BASE_URL}/api/adjudicate/single",
-            headers=_api_headers(),
-            json={
-                "visit_occurrence_id": record.get("visit_occurrence_id"),
-                "person_id": record.get("person_id"),
-                "notes_formatted_text": record.get("notes_formatted_text"),
-                "target_condition": condition,
-                "clinical_criteria": criteria,
-            },
-            timeout=600,
-        )
-        resp.raise_for_status()
+        try:
+            resp = requests.post(
+                f"{API_BASE_URL}/api/adjudicate/single",
+                headers=_api_headers(),
+                json={
+                    "visit_occurrence_id": record.get("visit_occurrence_id"),
+                    "person_id": record.get("person_id"),
+                    "notes_formatted_text": record.get("notes_formatted_text"),
+                    "target_condition": condition,
+                    "clinical_criteria": criteria,
+                },
+                timeout=600,
+            )
+        except requests.RequestException:
+            st.error("Could not reach the adjudication API. Retry once it is back online.")
+            return None
+        if resp.status_code != 200:
+            st.error(_api_error_message(resp))
+            return None
         return resp.json()
-    return get_local_engine().adjudicate_single(record, condition, criteria)
+    try:
+        return get_local_engine().adjudicate_single(record, condition, criteria)
+    except RuntimeError:
+        st.error("The configured LLM backend is not available in this process. Start the API service or fix the backend configuration.")
+        return None
 
 
 def adjudicate_cohort(recs, condition, criteria):
+    """Batch adjudicate. Returns None (after showing an error) instead of raising."""
     if api_online:
         try:
             resp = requests.post(
@@ -298,13 +362,20 @@ def adjudicate_cohort(recs, condition, criteria):
                     "clinical_criteria": criteria,
                     "visit_occurrence_ids": [item["visit_occurrence_id"] for item in recs],
                 },
-                timeout=300,
+                timeout=600,
             )
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
-    results = get_local_engine().adjudicate_batch(recs, condition, criteria)
+        except requests.RequestException:
+            st.error("Could not reach the adjudication API. Retry once it is back online.")
+            return None
+        if resp.status_code != 200:
+            st.error(_api_error_message(resp))
+            return None
+        return resp.json()
+    try:
+        results = get_local_engine().adjudicate_batch(recs, condition, criteria)
+    except RuntimeError:
+        st.error("The configured LLM backend is not available in this process. Start the API service or fix the backend configuration.")
+        return None
     save_batch_results(results, condition)
     return results
 
@@ -410,9 +481,9 @@ with tab_review:
         session_key = f"adj_{selected_vid}_{target_condition}"
         if run_btn:
             with st.spinner("Running adjudication..."):
-                st.session_state[session_key] = adjudicate_record(
-                    selected_record, target_condition, active_criteria
-                )
+                adjudication = adjudicate_record(selected_record, target_condition, active_criteria)
+            if adjudication is not None:
+                st.session_state[session_key] = adjudication
 
         if session_key not in st.session_state:
             st.info("Click **Adjudicate this Encounter** to run the engine. Charts are not scored on page load.")
@@ -570,7 +641,9 @@ with tab_batch:
 
     if st.button("▶️ Execute Full Cohort Batch Adjudication", type="primary"):
         with st.spinner(f"Running high-throughput batch adjudication on {len(records)} visits..."):
-            st.session_state["cohort_results"] = adjudicate_cohort(records, target_condition, active_criteria)
+            cohort_results = adjudicate_cohort(records, target_condition, active_criteria)
+        if cohort_results:
+            st.session_state["cohort_results"] = cohort_results
 
     if "cohort_results" not in st.session_state:
         persisted = []

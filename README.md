@@ -104,9 +104,12 @@ The Two-Tier Hybrid engine pairs deterministic negation/trigger pre-screening wi
 # Enable the hybrid backend
 export ROSEGOLD_LLM_BACKEND="hybrid"
 
-# Specify the Muse-Glimmer endpoint (internal hospital cluster or local sglang/vLLM server)
-export ROSEGOLD_MUSE_URL="http://129.106.31.72:7790/v1/completions"
+# Specify the Muse-Glimmer endpoint (internal hospital cluster or local sglang/vLLM server).
+# Required: there is no default. Clinical notes are POSTed here, so it must be https://
+# (plain http:// is accepted only for loopback, or with ROSEGOLD_MUSE_ALLOW_HTTP=1 on a private network).
+export ROSEGOLD_MUSE_URL="https://muse.your-hospital.internal/v1/completions"
 export ROSEGOLD_MUSE_MODEL="Muse-Glimmer-30B"
+export ROSEGOLD_MUSE_API_KEY="..."   # optional bearer token for the endpoint
 
 # Run batch adjudication
 python -m app.adjudicator \
@@ -213,8 +216,11 @@ python -m app.adjudicator \
 | :--- | :--- | :--- | :--- |
 | `ROSEGOLD_LLM_BACKEND` | `str` | `auto` | Backend selector: `vllm`, `hybrid`, `llamacpp`, `vertex`, or `keyword_rules`. |
 | `ROSEGOLD_MODEL_NAME` | `str` | `auto` | Hugging Face model ID or path. Set to `auto` for hardware-driven selection. |
-| `ROSEGOLD_MUSE_URL` | `str` | `http://129.106.31.72:7790/v1/completions` | HTTP endpoint URL for remote Muse-Glimmer-30B inference. |
-| `ROSEGOLD_MUSE_MODEL` | `str` | `Muse-Glimmer-30B` | Model name header passed to the Muse completion endpoint. |
+| `ROSEGOLD_MUSE_URL` | `str` | **required for `hybrid`** | Completions endpoint for Muse-Glimmer-30B. Must be `https://`; `http://` only for loopback or with `ROSEGOLD_MUSE_ALLOW_HTTP=1`. No default — the hybrid backend refuses to start without it. |
+| `ROSEGOLD_MUSE_MODEL` | `str` | `Muse-Glimmer-30B` | Model name passed to the Muse completion endpoint. |
+| `ROSEGOLD_MUSE_API_KEY` | `str` | `null` | Optional bearer token sent to the Muse endpoint. |
+| `ROSEGOLD_MUSE_TIMEOUT` | `float` | `25` | Per-visit timeout (seconds) for the Muse call; on failure the visit is labelled `hybrid:rules_only(...)`. |
+| `ROSEGOLD_MUSE_ALLOW_HTTP` | `bool` | `0` | Permit a plain-`http://` Muse endpoint on a trusted private network. |
 | `ROSEGOLD_LLAMA_REPO` | `str` | `bartowski/Llama-3.2-3B-Instruct-GGUF` | Hugging Face repository containing GGUF weights for CPU inference. |
 | `ROSEGOLD_LLAMA_GGUF` | `str` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | Filename of the target GGUF file within the repository. |
 | `ROSEGOLD_MODEL_DIR` | `str` | `/tmp/rosegold-models` | Persistent directory for caching downloaded GGUF weights. |
@@ -226,7 +232,12 @@ python -m app.adjudicator \
 | `ROSEGOLD_LOAD_CPU_WEIGHTS` | `bool` | `0` | Set to `1` to load unquantized PyTorch Hugging Face weights directly into host RAM. |
 | `HF_TOKEN` | `str` | `null` | Hugging Face token for downloading gated models (Llama 3.1, Gemma 2). |
 | `GOOGLE_CLOUD_PROJECT` | `str` | `null` | Google Cloud Project ID for Vertex AI Gemini execution. |
-| `ROSEGOLD_API_KEY` | `str` | `null` | When set, every `/api/*` route requires `X-API-Key: <key>` (or `Authorization: Bearer <key>`). `/health` stays open. The dashboard reads the same variable. |
+| `ROSEGOLD_API_KEY` | `str` | `null` | When set, every `/api/*` route requires `X-API-Key: <key>` (or `Authorization: Bearer <key>`). `/health` stays open but hides file paths and backend error text from unauthenticated callers. The dashboard reads the same variable. |
+| `ROSEGOLD_RATE_LIMIT_PER_MIN` | `int` | `0` (off) | Per-client request cap on `/api/*`; excess requests get `429` with `Retry-After`. Keyed by peer address, or by `X-Forwarded-For` when `ROSEGOLD_TRUST_PROXY=1`. |
+| `ROSEGOLD_TRUST_PROXY` | `bool` | `0` | Trust `X-Forwarded-For` for rate-limit client identity. Only set behind a proxy that overwrites the header (Cloud Run does). |
+| `ROSEGOLD_BACKEND_RETRY_SECONDS` | `float` | `60` | Cooldown before a failed LLM backend load is retried on the next request. |
+| `ROSEGOLD_LOG_LEVEL` | `str` | `INFO` | Python log level for the `rosegold.*` loggers. |
+| `ROSEGOLD_LOG_JSON` | `bool` | `0` | Emit one JSON object per log line (Cloud Logging / Loki friendly). |
 | `ROSEGOLD_CORS_ORIGINS` | `str` | `null` | Comma-separated browser origins allowed to call the API. Unset = no cross-origin access (the dashboard talks to the API server-side, so it does not need this). |
 | `ROSEGOLD_MAX_BODY_BYTES` | `int` | `8388608` | Hard cap on any request body; larger requests get `413` before parsing. |
 | `ROSEGOLD_MAX_NOTES_CHARS` | `int` | `400000` | Maximum `notes_formatted_text` length accepted by `/api/adjudicate/single`. |
@@ -326,22 +337,27 @@ A single batch run automatically writes:
 
 The FastAPI backend exposes endpoints for real-time single-visit phenotyping, batch jobs, and physician audit logging.
 
-### 1. Health Check (`GET /health`)
-Inspect active model backend, hardware acceleration, and storage configuration:
+### 1. Health & Readiness (`GET /health`, `GET /ready`)
+`/health` is a liveness probe: it answers `200` whenever the process is up and summarises the backend. `/ready` is a readiness probe: it answers `200` only when adjudication calls would succeed right now, and `503` (with `Retry-After`) while a required LLM backend is still loading or failed to load. Point Cloud Run startup probes / Kubernetes `readinessProbe` at `/ready`.
 ```bash
 curl -s http://127.0.0.1:8000/health | jq
 ```
 ```json
 {
   "status": "healthy",
+  "ready": true,
   "engine_ready": true,
+  "backend_initializing": false,
   "vllm_active": true,
   "backend": "vllm",
+  "llm_real": true,
   "model_name": "meta-llama/Llama-3.1-8B-Instruct",
   "device": "cuda",
+  "auth_required": true,
   "storage": { "durable": true }
 }
 ```
+When `ROSEGOLD_API_KEY` is set, `notes_file`, `visits_file`, the full `storage` block and `error` are only returned to callers that present the key. Every response carries an `X-Request-ID` header (echoed from the request when well-formed); quote it when reading logs.
 
 ### 2. Adjudicate Single Visit (`POST /api/adjudicate/single`)
 Adjudicate by encounter ID or direct raw note text:
@@ -660,38 +676,51 @@ Access the dashboard at `http://localhost:8501` (or via SSH port forwarding: `ss
 
 Rose Gold handles clinical narrative, so the service is built to fail closed. What is in place:
 
-**API boundary (`app/api.py`)**
+**API boundary (`app/api.py`, `app/paths.py`)**
 - Request bodies are capped (`ROSEGOLD_MAX_BODY_BYTES`) by a pure-ASGI middleware that checks `Content-Length` and also counts streamed chunks, so a chunked upload cannot bypass the limit.
 - Every free-text field has an explicit length bound; visit-ID lists are bounded; confidence values must be in `[0, 1]`; blank conditions are rejected with `422`.
-- Caller-supplied dataset paths (`notes_path` / `visits_path`) must resolve, symlinks included, to a regular file strictly inside `ROSEGOLD_DATA_DIR`. Traversal, prefix collisions (`data_evil/…`), directories, and symlink escapes all return `400` rather than silently substituting the default dataset.
-- Unexpected exceptions are logged with a short correlation id and returned as a generic `500`; backend-unavailable conditions return `503`. Internal paths and stack traces never reach clients.
-- Optional shared-secret auth: set `ROSEGOLD_API_KEY` and every `/api/*` route requires `X-API-Key` (or `Authorization: Bearer`), compared in constant time. `/health` stays open for probes and reports `auth_required`.
+- Caller-supplied dataset paths (`notes_path` / `visits_path`) go through one shared guard (`app/paths.py`) used by **both** the API and the Streamlit sidebar: the path must resolve, symlinks included, to a regular `.csv`/`.parquet` file strictly inside `ROSEGOLD_DATA_DIR`. Traversal, prefix collisions (`data_evil/…`), directories, other extensions and symlink escapes are rejected (`400` from the API; an inline error in the dashboard) rather than silently substituting the default dataset or reading an arbitrary file.
+- Every response carries `X-Request-ID` (a well-formed inbound id is echoed, anything else is replaced). Unexpected exceptions are logged under that id and returned as a generic `500` whose `error_id` is the same value. Backend-unavailable conditions return a generic `503` with `Retry-After`; the underlying error text (which can contain URLs or paths) goes to the log only.
+- Optional shared-secret auth: set `ROSEGOLD_API_KEY` and every `/api/*` route requires `X-API-Key` (or `Authorization: Bearer`), compared in constant time. `/health` stays open for probes but, once a key is configured, hides file paths, storage layout and backend error text from unauthenticated callers.
+- Optional per-client rate limiting on `/api/*` (`ROSEGOLD_RATE_LIMIT_PER_MIN`, `429` + `Retry-After`). `X-Forwarded-For` is only trusted with `ROSEGOLD_TRUST_PROXY=1`.
 - CORS is closed unless `ROSEGOLD_CORS_ORIGINS` is set, and credentials are never combined with a wildcard origin.
-- Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, and `Cache-Control: no-store` on data routes.
+- Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, and — on JSON routes — `Cache-Control: no-store` plus `Content-Security-Policy: default-src 'none'`.
+- `/ready` is a real readiness probe: `503` while a required LLM backend is loading or failed, `200` only when adjudication calls would succeed.
 
-**Inference engine (`app/engine.py`, `app/prompts.py`)**
-- Backend initialization is guarded by a lock so concurrent first requests wait for a single load instead of racing a half-built engine; `/health` exposes `backend_initializing`.
+**Inference engine (`app/engine.py`, `app/hybrid_engine.py`, `app/vertex_engine.py`, `app/prompts.py`)**
+- Backend initialization is guarded by a lock so concurrent first requests wait for a single load; `/health` exposes `backend_initializing`. A failed load is retried after `ROSEGOLD_BACKEND_RETRY_SECONDS` (default 60 s) on the next request, so a transient cold-start failure does not pin the instance in a degraded state until someone restarts it.
+- When `ROSEGOLD_LLM_BACKEND` names a real backend (`llamacpp`, `vertex`, `hybrid`) and it is unavailable, requests fail with `503`. Keyword-rule labels are never substituted for LLM output unless `ROSEGOLD_ALLOW_MOCK=1` is set explicitly. The dashboard follows the same rule: an API error is shown, not papered over with an in-process engine.
+- The hybrid engine has **no default endpoint**. `ROSEGOLD_MUSE_URL` must be set and must be `https://` (loopback or `ROSEGOLD_MUSE_ALLOW_HTTP=1` excepted). `ROSEGOLD_MUSE_API_KEY` is sent as a bearer token. If the LLM call fails, the record is tagged `inference_backend: hybrid:rules_only(<reason>)` with reduced confidence and a rationale note instead of claiming a verification that never ran.
+- Vertex failures are isolated per visit (an `INDETERMINATE` record with the error class) instead of aborting the batch.
 - llama.cpp / vLLM / HF generation is serialized behind an inference lock (those handles are not safe for concurrent `generate()` calls from uvicorn's threadpool).
 - vLLM `trust_remote_code` is **off** by default (`ROSEGOLD_TRUST_REMOTE_CODE=1` to opt in for a reviewed repo).
 - The system prompt states that notes and criteria are data, not instructions, and the output is schema-constrained, which limits prompt-injection impact to the rationale text.
+- The old CLI demo path that emitted fabricated "verbatim" evidence quotes has been removed; every evidence quote now comes from the rules extractor or a model reading the actual notes.
 
 **Model weights (`app/model_store.py`)**
 - Downloads are `https://` only, streamed with a socket timeout to a `.part` file, then renamed atomically. Partial or undersized files are deleted.
 - `ROSEGOLD_LLAMA_SHA256` pins the digest; mismatching downloads and cached copies are discarded.
 - `ROSEGOLD_LLAMA_GGUF` is reduced to a bare filename so the env cannot smuggle directory components.
 
-**Storage (`app/storage.py`)**
-- Audit and batch JSONL readers skip blank or corrupt lines (a write interrupted mid-flush on a network mount) instead of taking the whole log offline. Writes are `fsync`ed.
+**Storage (`app/storage.py`, `app/omop_loader.py`)**
+- Whole-file exports (CSV, Parquet, JSONL, OMOP OBSERVATION, saved criteria) are written to a sibling temp file, `fsync`ed and `os.replace`d, so a crash mid-write leaves the previous good file rather than a truncated one. Writers are serialized so concurrent audit appends cannot interleave.
+- Audit and batch JSONL readers skip blank or corrupt lines instead of taking the whole log offline.
+- Loader caches are lock-protected and a `NULL` `person_id` yields `0` instead of a `500`.
+
+**Dashboard (`app/ui.py`)**
+- Streamlit runs with `client.showErrorDetails=none` and `toolbarMode=minimal` (requires Streamlit ≥ 1.41), so tracebacks and file paths stay in the server log. API failures are shown as short messages with the request id.
 
 **Containers and deployment**
-- `Dockerfile.cpu` runs as an unprivileged user (uid 1000) and copies only the bundled synthetic cohort. Credentialed extracts under `data/mimic-iii-ext-notes*` never enter the image even when present locally; the Singularity definitions and the GPU `Dockerfile` follow the same rule. `.dockerignore` and `.gcloudignore` exclude them as a second layer.
+- `Dockerfile.cpu` runs as an unprivileged user (uid 1000) and copies only the bundled synthetic cohort. Credentialed extracts under `data/mimic-iii-ext-notes*` never enter the image even when present locally; the Singularity definitions and the GPU `Dockerfile` follow the same rule. `.dockerignore` and `.gcloudignore` exclude them as a second layer. Both Dockerfiles declare a `HEALTHCHECK`; the GPU image takes a `VLLM_TAG` build arg so the base can be pinned.
 - `requirements.txt` carries upper bounds so a fresh build cannot pull an unreviewed major release.
-- The start scripts supervise both processes: if uvicorn or Streamlit exits, the container exits so the platform restarts it (rather than serving a UI whose API is gone and silently loading a second model in-process). uvicorn runs with `--no-server-header` and a concurrency limit.
-- Cloud Run deploys run as a dedicated least-privilege service account, use an immutable git-SHA image tag, and refuse to ship an uncommitted tree. See [Deployment Topologies](#c-google-cloud-run-serverless-cpu--gcs-storage).
+- `docker-compose.yml` binds ports to `127.0.0.1` by default, mounts `./data` read-only, and passes `ROSEGOLD_API_KEY` through.
+- The start scripts supervise both processes: if uvicorn or Streamlit exits, the container exits so the platform restarts it. uvicorn runs with `--no-server-header` and a concurrency limit.
+- Cloud Run deploys run as a dedicated least-privilege service account, use an immutable git-SHA image tag, refuse to ship an uncommitted tree, refuse a `hybrid` backend without an `https://` Muse URL, and can mount the API key from Secret Manager (`ROSEGOLD_API_KEY_SECRET=<name>`) instead of a plain env var. See [Deployment Topologies](#c-google-cloud-run-serverless-cpu--gcs-storage).
+- `.github/workflows/ci.yml` runs the suite on Python 3.11/3.12, syntax-checks the shell entrypoints, fails if a Dockerfile copies all of `data/` or if a hardcoded IP endpoint appears under `app/`, and runs `pip-audit` (advisory).
 
-Regression coverage for all of the above lives in `tests/test_security_hardening.py`.
+Regression coverage lives in `tests/test_security_hardening.py` and `tests/test_production_hardening.py`.
 
-**Out of scope / still your responsibility:** the public Cloud Run URL is unauthenticated by default (`REQUIRE_AUTH=1` flips it), there is no per-client rate limiting, and the bundled Streamlit dashboard has no user login. Do not put PHI behind the default public deployment.
+**Out of scope / still your responsibility:** the public Cloud Run URL is unauthenticated by default (`REQUIRE_AUTH=1` flips it), the rate limiter is per-process and in-memory (fine for one worker, not a substitute for an edge WAF), and the bundled Streamlit dashboard has no user login. Do not put PHI behind the default public deployment.
 
 ---
 

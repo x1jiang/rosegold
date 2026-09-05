@@ -58,6 +58,8 @@ streamlit run app/ui.py \
   --server.headless true \
   --server.fileWatcherType none \
   --server.enableXsrfProtection true \
+  --client.showErrorDetails none \
+  --client.toolbarMode minimal \
   --browser.gatherUsageStats false &
 UI_PID=$!
 

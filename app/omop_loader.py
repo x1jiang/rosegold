@@ -1,4 +1,5 @@
 import os
+import threading
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -10,12 +11,21 @@ _TABLE_CACHE: Dict[Tuple[Any, ...], pd.DataFrame] = {}
 _RECORD_CACHE: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
 _INDEX_CACHE: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
 _CACHE_LIMIT = 24
+# uvicorn serves sync endpoints from a threadpool; guard the FIFO eviction so a
+# concurrent insert cannot trip "dictionary changed size during iteration".
+_CACHE_LOCK = threading.Lock()
+
+
+def _cache_get(store: Dict, key: Tuple[Any, ...]) -> Any:
+    with _CACHE_LOCK:
+        return store.get(key)
 
 
 def _cache_put(store: Dict, key: Tuple[Any, ...], value: Any, limit: int = _CACHE_LIMIT) -> None:
-    store[key] = value
-    while len(store) > limit:
-        store.pop(next(iter(store)))
+    with _CACHE_LOCK:
+        store[key] = value
+        while len(store) > limit:
+            store.pop(next(iter(store)))
 
 
 def _file_stamp(path: str) -> Tuple[str, int, int]:
@@ -27,7 +37,7 @@ def _file_stamp(path: str) -> Tuple[str, int, int]:
 def _read_table(path: str, columns: Optional[Sequence[str]] = None) -> pd.DataFrame:
     stamp = _file_stamp(path)
     key = (stamp, tuple(c.lower() for c in columns) if columns else None)
-    cached = _TABLE_CACHE.get(key)
+    cached = _cache_get(_TABLE_CACHE, key)
     if cached is not None:
         return cached
 
@@ -54,7 +64,7 @@ def load_visit_index(notes_path: str, visits_path: Optional[str] = None) -> List
     """Visit metadata plus note counts, without materializing note text."""
     df_notes, df_visits, stamp = _chart_tables(notes_path, visits_path)
     key = stamp
-    cached = _INDEX_CACHE.get(key)
+    cached = _cache_get(_INDEX_CACHE, key)
     if cached is not None:
         return cached
 
@@ -110,7 +120,7 @@ def load_omop_data(
     visit_key = tuple(int(v) for v in target_visits) if target_visits is not None else None
     df_notes, df_visits, stamp = _chart_tables(notes_path, visits_path)
     cache_key = (stamp, visit_key, max_notes, max_chars)
-    cached = _RECORD_CACHE.get(cache_key)
+    cached = _cache_get(_RECORD_CACHE, cache_key)
     if cached is not None:
         return cached
 
@@ -177,7 +187,7 @@ def load_omop_data(
 
         prepared_records.append(
             {
-                "person_id": int(visit.person_id),
+                "person_id": person_id,
                 "visit_occurrence_id": visit_id,
                 "visit_start_date": str(getattr(visit, "visit_start_date", "Unknown")),
                 "visit_end_date": str(getattr(visit, "visit_end_date", "Unknown")),
