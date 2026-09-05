@@ -96,11 +96,17 @@ def main():
     parser.add_argument("--tensor_parallel_size", type=int, default=1, help="Number of GPUs to shard model across")
     parser.add_argument("--quantization", type=str, default=None, help="Quantization scheme (e.g. 'fp8', 'awq', 'bitsandbytes')")
     parser.add_argument("--max_model_len", type=int, default=32768, help="Max context window length in tokens")
+    parser.add_argument("--clinical_criteria", type=str, default=None, help="Custom clinical criteria text (overrides config.yaml default)")
+    parser.add_argument("--backend", type=str, default=None, help="Explicit backend to use (vllm, hybrid, llamacpp, vertex, keyword_rules)")
+    parser.add_argument("--chunk_size", type=int, default=None, help="Override batch chunk size")
 
     args = parser.parse_args()
+    if args.backend:
+        os.environ["ROSEGOLD_LLM_BACKEND"] = args.backend.strip()
+
     settings = pipeline_settings()
-    criteria = resolve_criteria(args.target_condition)
-    chunk_size = max(1, int(settings.get("infer_chunk_size", 32)))
+    criteria = resolve_criteria(args.target_condition, args.clinical_criteria)
+    chunk_size = args.chunk_size if args.chunk_size and args.chunk_size > 0 else max(1, int(settings.get("infer_chunk_size", 32)))
 
     print("=" * 70)
     print("ROSE GOLD CLINICAL PHENOTYPING & ADJUDICATION PIPELINE")
@@ -108,10 +114,15 @@ def main():
     print(f"Notes File: {args.notes_path}")
     print(f"Visits File: {args.visits_path}")
     print(f"Model: {args.model_name}")
+    if args.backend:
+        print(f"Backend: {args.backend}")
     print("=" * 70)
 
     records = load_omop_data(notes_path=args.notes_path, visits_path=args.visits_path)
     print(f"Loaded {len(records)} visit encounters ready for adjudication.")
+    if not records:
+        print("[WARNING] No encounter records found to adjudicate. Exiting.")
+        return
 
     os.makedirs(os.path.dirname(args.output_path) or ".", exist_ok=True)
     parquet_path = args.output_path.rsplit(".", 1)[0] + ".parquet"
@@ -124,13 +135,16 @@ def main():
             for line in handle:
                 if not line.strip():
                     continue
-                item = json.loads(line)
-                adjudications.append(item)
-                if item.get("visit_occurrence_id") is not None:
-                    done_ids.add(int(item["visit_occurrence_id"]))
+                try:
+                    item = json.loads(line)
+                    adjudications.append(item)
+                    if item.get("visit_occurrence_id") is not None:
+                        done_ids.add(int(item["visit_occurrence_id"]))
+                except Exception:
+                    continue
         print(f"Resuming from checkpoint: {len(done_ids)} visits already written.")
 
-    pending = [rec for rec in records if int(rec["visit_occurrence_id"]) not in done_ids]
+    pending = [rec for rec in records if int(rec.get("visit_occurrence_id", 0)) not in done_ids]
     engine = AdjudicationEngine(
         model_name=args.model_name,
         tensor_parallel_size=args.tensor_parallel_size,

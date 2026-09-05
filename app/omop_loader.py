@@ -58,22 +58,34 @@ def load_visit_index(notes_path: str, visits_path: Optional[str] = None) -> List
     if cached is not None:
         return cached
 
-    counts = (
-        df_notes.groupby("visit_occurrence_id").size()
-        if "visit_occurrence_id" in df_notes.columns
-        else pd.Series(dtype="int64")
+    if "visit_occurrence_id" in df_visits.columns:
+        df_visits = df_visits[df_visits["visit_occurrence_id"].notna()]
+    if "visit_occurrence_id" in df_notes.columns:
+        df_notes = df_notes[df_notes["visit_occurrence_id"].notna()]
+
+    counts_dict = (
+        df_notes.groupby("visit_occurrence_id").size().to_dict()
+        if "visit_occurrence_id" in df_notes.columns and not df_notes.empty
+        else {}
     )
 
     index: List[Dict[str, Any]] = []
     for visit in df_visits.itertuples(index=False):
-        visit_id = int(visit.visit_occurrence_id)
+        try:
+            visit_id = int(visit.visit_occurrence_id)
+        except (ValueError, TypeError):
+            continue
+        try:
+            person_id = int(getattr(visit, "person_id", 0))
+        except (ValueError, TypeError):
+            person_id = 0
         index.append(
             {
                 "visit_occurrence_id": visit_id,
-                "person_id": int(visit.person_id),
+                "person_id": person_id,
                 "visit_start_date": str(getattr(visit, "visit_start_date", "Unknown")),
                 "visit_end_date": str(getattr(visit, "visit_end_date", "Unknown")),
-                "note_count": int(counts.get(visit_id, 0)),
+                "note_count": int(counts_dict.get(visit_id, 0)),
             }
         )
     _cache_put(_INDEX_CACHE, key, index)
@@ -103,10 +115,20 @@ def load_omop_data(
         return cached
 
     if target_visits is not None:
-        wanted = set(int(v) for v in target_visits)
+        wanted = set()
+        for v in target_visits:
+            try:
+                wanted.add(int(v))
+            except (ValueError, TypeError):
+                pass
         df_visits = df_visits[df_visits["visit_occurrence_id"].isin(wanted)]
         if "visit_occurrence_id" in df_notes.columns:
             df_notes = df_notes[df_notes["visit_occurrence_id"].isin(wanted)]
+
+    if "visit_occurrence_id" in df_visits.columns:
+        df_visits = df_visits[df_visits["visit_occurrence_id"].notna()]
+    if "visit_occurrence_id" in df_notes.columns:
+        df_notes = df_notes[df_notes["visit_occurrence_id"].notna()]
 
     if "note_text" in df_notes.columns:
         df_notes = df_notes[df_notes["note_text"].notna() & (df_notes["note_text"].astype(str).str.strip() != "")]
@@ -119,12 +141,23 @@ def load_omop_data(
 
     notes_by_visit: Dict[int, pd.DataFrame] = {}
     if not df_notes.empty and "visit_occurrence_id" in df_notes.columns:
-        for visit_id, group in df_notes.groupby("visit_occurrence_id", sort=False):
-            notes_by_visit[int(visit_id)] = group.head(max_notes)
+        for visit_id_val, group in df_notes.groupby("visit_occurrence_id", sort=False):
+            try:
+                vid = int(visit_id_val)
+                notes_by_visit[vid] = group.head(max_notes)
+            except (ValueError, TypeError):
+                continue
 
     prepared_records: List[Dict[str, Any]] = []
     for visit in df_visits.itertuples(index=False):
-        visit_id = int(visit.visit_occurrence_id)
+        try:
+            visit_id = int(visit.visit_occurrence_id)
+        except (ValueError, TypeError):
+            continue
+        try:
+            person_id = int(getattr(visit, "person_id", 0))
+        except (ValueError, TypeError):
+            person_id = 0
         visit_notes = notes_by_visit.get(visit_id)
         if visit_notes is not None and not visit_notes.empty:
             chunks = []
