@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from contextlib import asynccontextmanager
+
 from app.schemas import RoseGoldAdjudication
 from app.engine import AdjudicationEngine
 from app.omop_loader import load_omop_data, load_visit_index
@@ -26,20 +28,6 @@ from app.storage import (
     storage_status,
 )
 
-app = FastAPI(
-    title="Rose Gold Clinical Adjudication API",
-    description="High-Throughput On-Premises OMOP Note Adjudication & Phenotyping Service",
-    version="1.1.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=os.getenv("ROSEGOLD_CORS_ORIGINS", "*").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 DATA_DIR = os.path.abspath(os.getenv("ROSEGOLD_DATA_DIR", "data"))
 NOTES_PATH = os.path.abspath(os.getenv("ROSEGOLD_NOTES_PATH", os.path.join(DATA_DIR, "synthetic_notes.csv")))
 VISITS_PATH = os.path.abspath(os.getenv("ROSEGOLD_VISITS_PATH", os.path.join(DATA_DIR, "synthetic_visits.csv")))
@@ -49,9 +37,26 @@ engine = AdjudicationEngine(
 )
 
 
-@app.on_event("startup")
-def _warm_real_llm() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     threading.Thread(target=lambda: engine.backend_status(init=True), daemon=True).start()
+    yield
+
+
+app = FastAPI(
+    title="Rose Gold Clinical Adjudication API",
+    description="High-Throughput On-Premises OMOP Note Adjudication & Phenotyping Service",
+    version="1.1.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("ROSEGOLD_CORS_ORIGINS", "*").split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _safe_data_path(user_path: Optional[str], default_path: str) -> str:
@@ -175,7 +180,10 @@ def adjudicate_single_visit(req: SingleAdjudicationRequest):
         raise HTTPException(status_code=400, detail="Must provide either visit_occurrence_id or notes_formatted_text.")
 
     criteria = resolve_criteria(req.target_condition, req.clinical_criteria)
-    return engine.adjudicate_single(record, req.target_condition, criteria)
+    try:
+        return engine.adjudicate_single(record, req.target_condition, criteria)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Adjudication error: {exc}")
 
 
 @app.post("/api/adjudicate/batch", response_model=List[RoseGoldAdjudication])
@@ -188,9 +196,12 @@ def adjudicate_batch_visits(req: BatchAdjudicationRequest):
         raise HTTPException(status_code=400, detail="No matching visit records found.")
 
     criteria = resolve_criteria(req.target_condition, req.clinical_criteria)
-    results = engine.adjudicate_batch(records, req.target_condition, criteria)
-    save_batch_results(results, req.target_condition)
-    return results
+    try:
+        results = engine.adjudicate_batch(records, req.target_condition, criteria)
+        save_batch_results(results, req.target_condition)
+        return results
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Batch adjudication error: {exc}")
 
 
 @app.get("/api/audit")
