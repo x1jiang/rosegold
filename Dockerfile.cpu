@@ -1,35 +1,53 @@
+# Rose Gold CPU image (Cloud Run / any x86 host without a GPU)
+#
+# Hardening:
+#   * Runs as an unprivileged user (uid 1000). Cloud Run GCS volumes are mounted
+#     with matching uid/gid by deploy_to_gcp.sh.
+#   * Only the bundled synthetic cohort is copied. Credentialed extracts under
+#     data/mimic-iii-ext-notes* never enter the image even if present locally.
+#   * Python deps come from requirements.txt with upper bounds.
 FROM python:3.11-slim
 
 WORKDIR /workspace
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
     PORT=8080 \
     ROSEGOLD_DATA_DIR=/workspace/data \
     ROSEGOLD_API_URL=http://127.0.0.1:8000 \
+    ROSEGOLD_LOCAL_MODEL_DIR=/tmp/rosegold-models \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
-    STREAMLIT_SERVER_HEADLESS=true
+    STREAMLIT_SERVER_HEADLESS=true \
+    HOME=/home/rosegold
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1000 rosegold \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin rosegold
 
 COPY requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/requirements.txt \
-    && pip install --no-cache-dir huggingface_hub \
+    && pip install --no-cache-dir "huggingface_hub>=0.23,<1" \
     && pip install --no-cache-dir \
         --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
         llama-cpp-python
 
-COPY app /workspace/app
-COPY configs /workspace/configs
-COPY data /workspace/data
-COPY start_cloudrun.sh /workspace/start_cloudrun.sh
-COPY start_services.sh /workspace/start_services.sh
+COPY --chown=rosegold:rosegold app /workspace/app
+COPY --chown=rosegold:rosegold configs /workspace/configs
+COPY --chown=rosegold:rosegold data/synthetic_notes.csv data/synthetic_visits.csv /workspace/data/
+COPY --chown=rosegold:rosegold data/synthetic_mimic_ext_notes /workspace/data/synthetic_mimic_ext_notes
+COPY --chown=rosegold:rosegold start_cloudrun.sh start_services.sh /workspace/
 
-RUN chmod +x /workspace/start_cloudrun.sh /workspace/start_services.sh
+RUN chmod 0755 /workspace/start_cloudrun.sh /workspace/start_services.sh \
+    && mkdir -p /workspace/outputs /tmp/rosegold-models \
+    && chown -R rosegold:rosegold /workspace /tmp/rosegold-models
 
-EXPOSE 8080 8000 8501
+USER rosegold:rosegold
+
+EXPOSE 8080
 
 CMD ["/workspace/start_cloudrun.sh"]

@@ -2,7 +2,6 @@ import os
 import json
 import datetime
 from typing import Dict, Any, List, Optional
-import instructor
 from pydantic import ValidationError
 
 from app.schemas import RoseGoldAdjudication
@@ -42,6 +41,7 @@ class InstructorLlamaAdjudicator:
                     self.client = None
                     return
 
+            import instructor
             from openai import OpenAI
             raw_client = OpenAI(base_url=base_url, api_key=api_key, timeout=1.0)
             self.client = instructor.from_openai(raw_client, mode=instructor.Mode.JSON)

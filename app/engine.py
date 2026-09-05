@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import threading
 from typing import List, Dict, Any, Optional
 
 from app.schemas import RoseGoldAdjudication
@@ -15,6 +16,15 @@ def _allow_mock() -> bool:
 
 def _backend_name() -> str:
     return os.getenv("ROSEGOLD_LLM_BACKEND", "").lower().strip()
+
+
+def _trust_remote_code() -> bool:
+    """vLLM ``trust_remote_code`` executes Python shipped inside a model repo.
+
+    Off by default (Llama / Gemma do not need it). Opt in with
+    ``ROSEGOLD_TRUST_REMOTE_CODE=1`` only for repos you have reviewed.
+    """
+    return os.getenv("ROSEGOLD_TRUST_REMOTE_CODE", "").lower() in {"1", "true", "yes"}
 
 
 def _want_vertex() -> bool:
@@ -66,7 +76,17 @@ class AdjudicationEngine:
         self.hybrid_engine = None
         self.is_vllm_available = False
         self._backend_initialized = False
+        self._backend_ready = False
+        self._initializing = False
+        self._init_lock = threading.Lock()
+        # llama.cpp / vLLM / HF handles are not safe for concurrent generate()
+        # calls; uvicorn runs sync endpoints on a threadpool, so serialize.
+        self._infer_lock = threading.Lock()
         self.backend_error = None
+
+    @property
+    def is_initializing(self) -> bool:
+        return self._initializing
 
     def backend_status(self, init: bool = False) -> Dict[str, Any]:
         if init:
@@ -93,7 +113,7 @@ class AdjudicationEngine:
                 "model_name": self.vertex_engine.model_name,
                 "llm_real": True,
             }
-        if _want_llamacpp() and not self._backend_initialized:
+        if _want_llamacpp() and not self._backend_ready:
             return {
                 "backend": "loading",
                 "model_name": "Llama-3.2-3B-Instruct (loading)",
@@ -107,10 +127,25 @@ class AdjudicationEngine:
         }
 
     def _init_backend(self):
-        """Load vLLM, HF CPU weights, or Vertex Gemini on first use."""
-        if self._backend_initialized:
+        """Load vLLM, HF CPU weights, llama.cpp, hybrid, or Vertex Gemini on first use.
+
+        Guarded by a lock so concurrent first requests wait for one load instead
+        of racing a half-initialized engine.
+        """
+        if self._backend_ready:
             return
-        self._backend_initialized = True
+        with self._init_lock:
+            if self._backend_initialized:
+                return
+            self._backend_initialized = True
+            self._initializing = True
+            try:
+                self._init_backend_locked()
+            finally:
+                self._initializing = False
+                self._backend_ready = True
+
+    def _init_backend_locked(self):
         settings = pipeline_settings()
         prefix_cache = bool(settings.get("enable_prefix_caching", True))
 
@@ -129,7 +164,7 @@ class AdjudicationEngine:
                         tensor_parallel_size=self.tensor_parallel_size,
                         gpu_memory_utilization=self.gpu_memory_utilization,
                         max_model_len=self.max_model_len,
-                        trust_remote_code=True,
+                        trust_remote_code=_trust_remote_code(),
                         **extra_kwargs,
                     )
                     try:
@@ -222,14 +257,19 @@ class AdjudicationEngine:
     ) -> List[Dict[str, Any]]:
         """Adjudicates a batch of patient visit records."""
         self._init_backend()
+        if not records:
+            return []
         if self.is_vllm_available and self.llm is not None:
-            return self._vllm_adjudicate(records, target_condition, clinical_criteria)
+            with self._infer_lock:
+                return self._vllm_adjudicate(records, target_condition, clinical_criteria)
         if self.hybrid_engine is not None:
             return self.hybrid_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.cpu_engine is not None:
-            return self.cpu_engine.adjudicate_batch(records, target_condition, clinical_criteria)
+            with self._infer_lock:
+                return self.cpu_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.llama_engine is not None:
-            return self.llama_engine.adjudicate_batch(records, target_condition, clinical_criteria)
+            with self._infer_lock:
+                return self.llama_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.vertex_engine is not None:
             return self.vertex_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if (_want_llamacpp() or _want_vertex()) and not _allow_mock():
