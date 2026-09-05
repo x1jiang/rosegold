@@ -1,0 +1,41 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%help
+    Rose Gold Clinical Adjudication (CPU Singularity/Apptainer Container)
+    Includes llama.cpp quantized GGUF execution, deterministic rules, FastAPI, and Streamlit.
+    Runs on any commodity CPU node without requiring GPUs.
+
+%files
+    requirements.txt /workspace/requirements.txt
+    app /workspace/app
+    configs /workspace/configs
+    data /workspace/data
+    start_services.sh /workspace/start_services.sh
+    start_cloudrun.sh /workspace/start_cloudrun.sh
+
+%environment
+    export LC_ALL=C
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export ROSEGOLD_DATA_DIR=/workspace/data
+    export ROSEGOLD_OUTPUT_DIR=/workspace/outputs
+    export ROSEGOLD_API_URL=http://127.0.0.1:8000
+    export ROSEGOLD_LLM_BACKEND=llamacpp
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+    pip install --no-cache-dir -r /workspace/requirements.txt
+    pip install --no-cache-dir huggingface_hub
+    pip install --no-cache-dir \
+        --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+        llama-cpp-python
+    chmod +x /workspace/start_services.sh /workspace/start_cloudrun.sh
+    mkdir -p /workspace/outputs /workspace/data /tmp/rosegold-models
+
+%runscript
+    exec /workspace/start_services.sh "$@"
