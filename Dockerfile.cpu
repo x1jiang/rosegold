@@ -6,7 +6,15 @@
 #   * Only the bundled synthetic cohort is copied. Credentialed extracts under
 #     data/mimic-iii-ext-notes* never enter the image even if present locally.
 #   * Python deps come from requirements.txt with upper bounds.
+#   * The Llama GGUF is baked into the image (sha256-verified at build time by
+#     app/model_store.py) so a cold start loads weights from the image
+#     filesystem instead of copying 2 GB out of the GCS mount every time.
+#     Override the model with the LLAMA_REPO / LLAMA_GGUF / LLAMA_SHA256 build args.
 FROM python:3.11-slim
+
+ARG LLAMA_REPO=bartowski/Llama-3.2-3B-Instruct-GGUF
+ARG LLAMA_GGUF=Llama-3.2-3B-Instruct-Q4_K_M.gguf
+ARG LLAMA_SHA256=6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff
 
 WORKDIR /workspace
 
@@ -17,7 +25,10 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8080 \
     ROSEGOLD_DATA_DIR=/workspace/data \
     ROSEGOLD_API_URL=http://127.0.0.1:8000 \
-    ROSEGOLD_LOCAL_MODEL_DIR=/tmp/rosegold-models \
+    ROSEGOLD_LOCAL_MODEL_DIR=/workspace/models \
+    ROSEGOLD_MODEL_DIR=/workspace/models \
+    ROSEGOLD_LLAMA_REPO=${LLAMA_REPO} \
+    ROSEGOLD_LLAMA_GGUF=${LLAMA_GGUF} \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     STREAMLIT_SERVER_HEADLESS=true \
     HOME=/home/rosegold
@@ -36,6 +47,15 @@ RUN pip install --no-cache-dir -r /workspace/requirements.txt \
         --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
         "llama-cpp-python>=0.2.90,<1"
 
+# Model layer sits before the source layers so code changes do not invalidate it.
+# The pin is passed only to this RUN, not kept in ENV, so the runtime does not
+# re-hash 2 GB on every cold start.
+COPY app/model_store.py /tmp/build/model_store.py
+RUN ROSEGOLD_LLAMA_SHA256=${LLAMA_SHA256} ROSEGOLD_DOWNLOAD_TIMEOUT=300 \
+    python -c "import sys; sys.path.insert(0, '/tmp/build'); import model_store; print('[build] baked', model_store.ensure_llama_gguf())" \
+    && rm -rf /tmp/build \
+    && chmod 0644 /workspace/models/*.gguf
+
 COPY --chown=rosegold:rosegold app /workspace/app
 COPY --chown=rosegold:rosegold configs /workspace/configs
 COPY --chown=rosegold:rosegold data/synthetic_notes.csv data/synthetic_visits.csv /workspace/data/
@@ -44,15 +64,15 @@ COPY --chown=rosegold:rosegold start_cloudrun.sh start_services.sh /workspace/
 
 RUN chmod 0755 /workspace/start_cloudrun.sh /workspace/start_services.sh \
     && mkdir -p /workspace/outputs /tmp/rosegold-models \
-    && chown -R rosegold:rosegold /workspace /tmp/rosegold-models
+    && chown -R rosegold:rosegold /workspace/outputs /workspace/app /workspace/configs /workspace/data /tmp/rosegold-models
 
 USER rosegold:rosegold
 
 EXPOSE 8080
 
 # Cloud Run ignores HEALTHCHECK (it probes $PORT itself); docker/compose users
-# get a liveness signal. Long start-period covers the first GGUF download.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=900s --retries=3 \
+# get a liveness signal. Start-period covers loading the baked GGUF.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
 
 CMD ["/workspace/start_cloudrun.sh"]

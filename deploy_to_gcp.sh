@@ -17,6 +17,9 @@
 #   LLM_BACKEND       llamacpp (default) | vertex | hybrid. Vertex IAM is only
 #                     granted when the backend actually needs it.
 #   ALLOW_DIRTY=1     deploy with uncommitted changes (image tag gets -dirty).
+#   ALWAYS_ON_CPU=1   instance-based billing (--no-cpu-throttling). Default is
+#                     request-based billing, which is cheaper for sporadic use.
+#   LLAMA_REPO / LLAMA_GGUF / LLAMA_SHA256  which GGUF to bake into the image.
 #   DEPLOY_YES=1      skip the confirmation prompt.
 #   ROSEGOLD_API_KEY  optional shared secret for the loopback API (passed through
 #                     as a plain env var; visible to anyone with run.viewer).
@@ -45,6 +48,9 @@ PYTHON="${PYTHON:-python3}"
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-rosegold-runtime}"
 LLM_BACKEND="${LLM_BACKEND:-llamacpp}"
 CONTAINER_UID="${CONTAINER_UID:-1000}"
+LLAMA_REPO="${LLAMA_REPO:-bartowski/Llama-3.2-3B-Instruct-GGUF}"
+LLAMA_GGUF="${LLAMA_GGUF:-Llama-3.2-3B-Instruct-Q4_K_M.gguf}"
+LLAMA_SHA256="${LLAMA_SHA256:-6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff}"
 
 if ! command -v gcloud >/dev/null 2>&1; then
   echo "❌ gcloud CLI not found. Install: https://cloud.google.com/sdk/docs/install"
@@ -78,6 +84,16 @@ else
   AUTH_FLAG="--allow-unauthenticated"
 fi
 
+# Request-based billing by default: CPU is charged only while a request (or the
+# dashboard's websocket) is in flight, not for the ~15 min idle tail after each
+# session. ALWAYS_ON_CPU=1 restores instance-based billing (--no-cpu-throttling),
+# which lets the model preload finish before the first request arrives.
+if [[ "${ALWAYS_ON_CPU:-}" == "1" ]]; then
+  CPU_BILLING_FLAG="--no-cpu-throttling"
+else
+  CPU_BILLING_FLAG="--cpu-throttling"
+fi
+
 if [[ "$LLM_BACKEND" == "hybrid" || "$LLM_BACKEND" == "rosegold_hybrid" || "$LLM_BACKEND" == "muse_hybrid" ]]; then
   if [[ -z "${ROSEGOLD_MUSE_URL:-}" ]]; then
     echo "❌ LLM_BACKEND=${LLM_BACKEND} needs ROSEGOLD_MUSE_URL (the hybrid engine has no default endpoint)."
@@ -100,7 +116,8 @@ echo "   Image:   $IMAGE"
 echo "   Bucket:  gs://$GCS_BUCKET"
 echo "   Backend: $LLM_BACKEND"
 echo "   Access:  ${AUTH_FLAG#--}"
-echo "   Image is CPU-light (Dockerfile.cpu), runs as uid ${CONTAINER_UID}."
+echo "   Image is CPU-light (Dockerfile.cpu) with ${LLAMA_GGUF} baked in, runs as uid ${CONTAINER_UID}."
+echo "   Billing: $([[ "${ALWAYS_ON_CPU:-}" == "1" ]] && echo instance-based || echo request-based)"
 echo ""
 
 if [[ "${DEPLOY_YES:-}" == "1" ]]; then
@@ -221,7 +238,7 @@ echo "📦 Building CPU image ${IMAGE} via Cloud Build..."
 gcloud builds submit \
   --config cloudbuild.yaml \
   --project "$PROJECT_ID" \
-  --substitutions "_TAG=${IMAGE_TAG},_IMAGE=${IMAGE_BASE}"
+  --substitutions "_TAG=${IMAGE_TAG},_IMAGE=${IMAGE_BASE},_LLAMA_REPO=${LLAMA_REPO},_LLAMA_GGUF=${LLAMA_GGUF},_LLAMA_SHA256=${LLAMA_SHA256}"
 
 ENV_VARS="ROSEGOLD_DATA_DIR=/workspace/data"
 ENV_VARS+=",ROSEGOLD_MODEL_NAME=auto"
@@ -230,10 +247,12 @@ ENV_VARS+=",ROSEGOLD_OUTPUT_DIR=/mnt/gcs/outputs"
 ENV_VARS+=",ROSEGOLD_AUDIT_LOG=/mnt/gcs/outputs/human_audit_log.jsonl"
 ENV_VARS+=",ROSEGOLD_GCS_BUCKET=${GCS_BUCKET}"
 ENV_VARS+=",ROSEGOLD_LLM_BACKEND=${LLM_BACKEND}"
-ENV_VARS+=",ROSEGOLD_LLAMA_REPO=bartowski/Llama-3.2-3B-Instruct-GGUF"
-ENV_VARS+=",ROSEGOLD_LLAMA_GGUF=Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-ENV_VARS+=",ROSEGOLD_MODEL_DIR=/mnt/gcs/models"
-ENV_VARS+=",ROSEGOLD_LOCAL_MODEL_DIR=/tmp/rosegold-models"
+ENV_VARS+=",ROSEGOLD_LLAMA_REPO=${LLAMA_REPO}"
+ENV_VARS+=",ROSEGOLD_LLAMA_GGUF=${LLAMA_GGUF}"
+# The GGUF is baked into the image; point both lookups at it so cold starts never
+# touch the GCS mount for weights.
+ENV_VARS+=",ROSEGOLD_MODEL_DIR=/workspace/models"
+ENV_VARS+=",ROSEGOLD_LOCAL_MODEL_DIR=/workspace/models"
 ENV_VARS+=",GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
 ENV_VARS+=",ROSEGOLD_GIT_SHA=${GIT_SHA:-unknown}"
 if [[ -z "${ROSEGOLD_API_KEY_SECRET:-}" && -n "${ROSEGOLD_API_KEY:-}" ]]; then
@@ -265,7 +284,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory 8Gi \
   --cpu 4 \
   --cpu-boost \
-  --no-cpu-throttling \
+  "$CPU_BILLING_FLAG" \
   --timeout 900 \
   --min-instances 0 \
   --max-instances 2 \
