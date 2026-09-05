@@ -1,9 +1,12 @@
-# Builds the CPU image and pushes it under an immutable tag (_TAG, normally the
+# Builds the CPU image (with the Llama GGUF baked in) and pushes it under an immutable tag (_TAG, normally the
 # git short SHA) plus :latest. deploy_to_gcp.sh deploys the immutable tag so a
 # revision can always be traced back to a commit and rolled back exactly.
 substitutions:
   _TAG: latest
   _IMAGE: gcr.io/$PROJECT_ID/rosegold
+  _LLAMA_REPO: bartowski/Llama-3.2-3B-Instruct-GGUF
+  _LLAMA_GGUF: Llama-3.2-3B-Instruct-Q4_K_M.gguf
+  _LLAMA_SHA256: 6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
@@ -11,6 +14,12 @@ steps:
       - --pull
       - -f
       - Dockerfile.cpu
+      - --build-arg
+      - LLAMA_REPO=${_LLAMA_REPO}
+      - --build-arg
+      - LLAMA_GGUF=${_LLAMA_GGUF}
+      - --build-arg
+      - LLAMA_SHA256=${_LLAMA_SHA256}
       - -t
       - ${_IMAGE}:${_TAG}
       - -t
@@ -21,4 +30,5 @@ images:
   - ${_IMAGE}:latest
 options:
   logging: CLOUD_LOGGING_ONLY
-timeout: 1500s
+# pip install + 2 GB model download + ~2.5 GB push
+timeout: 2400s

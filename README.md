@@ -248,6 +248,7 @@ python -m app.adjudicator \
 | `ROSEGOLD_LLAMA_SHA256` | `str` | `null` | Pin the GGUF digest. Mismatched downloads or cached files are discarded. |
 | `ROSEGOLD_DOWNLOAD_TIMEOUT` | `float` | `120` | Socket timeout (seconds) for weight downloads. |
 | `ROSEGOLD_API_CONCURRENCY` | `int` | `64` | uvicorn `--limit-concurrency` used by the start scripts. |
+| `ROSEGOLD_LLAMA_THREADS` | `int` | all usable CPUs | llama.cpp thread count. Default is the smaller of the affinity mask and the cgroup CPU quota, so a 4-vCPU Cloud Run instance gets 4 threads even when the host reports more cores. |
 
 ---
 
@@ -502,11 +503,11 @@ gcloud config set project YOUR_PROJECT_ID
 What `deploy_to_gcp.sh` automates:
 - Refuses to deploy an uncommitted working tree (override with `ALLOW_DIRTY=1`).
 - Runs pre-flight test gates (`pytest tests/`).
-- Builds `Dockerfile.cpu` via Google Cloud Build and tags the image with the git SHA (plus `:latest`); the SHA tag is what gets deployed, so every revision maps to a commit and can be rolled back exactly.
+- Builds `Dockerfile.cpu` via Google Cloud Build with the Llama GGUF baked into the image (sha256-verified at build time), and tags the image with the git SHA (plus `:latest`); the SHA tag is what gets deployed, so every revision maps to a commit and can be rolled back exactly. Cold starts load weights from the image filesystem instead of copying 2 GB out of the GCS mount.
 - Provisions a dedicated Cloud Storage bucket (`gs://${PROJECT_ID}-rosegold-data`) with public-access prevention.
 - Creates a least-privilege runtime service account (`rosegold-runtime@…`) with only `storage.objectAdmin` on that bucket (plus `aiplatform.user` only when `LLM_BACKEND=vertex`), instead of the default compute service account.
 - Mounts GCS to Cloud Run at `/mnt/gcs` (owned by the container's unprivileged uid) for persistent physician audit logs and batch outputs.
-- Deploys Cloud Run with 4 vCPUs, 8GB RAM, and startup CPU boost.
+- Deploys Cloud Run with 4 vCPUs, 8GB RAM, startup CPU boost, and request-based billing (CPU is charged only while a request or the dashboard websocket is in flight; `ALWAYS_ON_CPU=1` switches back to instance-based billing so the model preloads before the first request).
 - Performs automated smoke tests against the Streamlit health endpoint.
 
 Useful knobs: `REQUIRE_AUTH=1` deploys with `--no-allow-unauthenticated` (IAM-gated UI), `ROSEGOLD_API_KEY=…` and `ROSEGOLD_LLAMA_SHA256=…` are passed through to the service, `DEPLOY_YES=1` skips the prompt.

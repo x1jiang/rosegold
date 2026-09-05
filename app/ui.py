@@ -126,15 +126,34 @@ def _api_headers():
     key = os.getenv("ROSEGOLD_API_KEY", "").strip()
     return {"X-API-Key": key} if key else {}
 
+# On Cloud Run (K_SERVICE) or when ROSEGOLD_API_URL is configured explicitly, the
+# API process is authoritative: falling back to an in-process engine would load a
+# second 2 GB model next to the one the API already holds. Local Mode is only for
+# laptops where no API is running at all (connection refused).
+_LOCAL_ENGINE_ALLOWED = not os.getenv("K_SERVICE") and not os.getenv("ROSEGOLD_API_URL")
+_LAST_HEALTH = {}
+
+
 @st.cache_data(ttl=5)
 def check_api():
     try:
-        r = requests.get(f"{API_BASE_URL}/health", headers=_api_headers(), timeout=1.2)
+        # connect timeout short; read timeout generous because /health runs on the
+        # same threadpool as a CPU-saturating adjudication and can take seconds.
+        r = requests.get(f"{API_BASE_URL}/health", headers=_api_headers(), timeout=(2, 8))
         if r.status_code == 200:
-            return True, r.json()
+            payload = r.json()
+            _LAST_HEALTH["data"] = payload
+            return True, payload
+    except requests.ConnectionError:
+        if _LOCAL_ENGINE_ALLOWED:
+            return False, None
     except Exception:
         pass
-    return False, None
+    if _LOCAL_ENGINE_ALLOWED:
+        return False, None
+    # API is expected to exist but is busy/unreachable right now: stay in API mode and
+    # show the last known state rather than spawning a duplicate engine.
+    return True, _LAST_HEALTH.get("data") or {"backend": "loading", "llm_real": False}
 
 api_online, health_data = check_api()
 

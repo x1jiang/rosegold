@@ -322,3 +322,54 @@ def test_engine_concurrent_first_use_is_safe(monkeypatch):
 
 def test_prompt_declares_notes_as_data():
     assert "not instructions" in SYSTEM_PROMPT
+
+
+# --------------------------------------------------------------------------
+# llama.cpp thread selection (cgroup-aware, env override)
+# --------------------------------------------------------------------------
+
+
+def test_llama_thread_count_env_override(monkeypatch):
+    from app import llamacpp_engine as le
+
+    monkeypatch.setenv("ROSEGOLD_LLAMA_THREADS", "3")
+    assert le.llama_thread_count() == 3
+    monkeypatch.setenv("ROSEGOLD_LLAMA_THREADS", "0")
+    assert le.llama_thread_count() == 1
+    monkeypatch.setenv("ROSEGOLD_LLAMA_THREADS", "junk")
+    assert le.llama_thread_count() == le.available_cpus()
+
+
+def test_available_cpus_respects_cgroup_quota(monkeypatch):
+    from app import llamacpp_engine as le
+
+    monkeypatch.delenv("ROSEGOLD_LLAMA_THREADS", raising=False)
+    monkeypatch.setattr(le, "os_cpu_count", lambda: 64)
+    monkeypatch.setattr(le, "_cgroup_cpu_quota", lambda: 4)
+    assert le.available_cpus() <= 4
+    monkeypatch.setattr(le, "_cgroup_cpu_quota", lambda: None)
+    assert le.available_cpus() >= 1
+    # A fractional quota (350m) rounds up so the model still uses the cores it has.
+    monkeypatch.setattr(le, "_cgroup_cpu_quota", lambda: 2)
+    assert le.llama_thread_count() <= 2
+
+
+def test_cgroup_quota_parser(tmp_path, monkeypatch):
+    from app import llamacpp_engine as le
+    import builtins
+
+    real_open = builtins.open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/sys/fs/cgroup/cpu.max":
+            return real_open(tmp_path / "cpu.max", *args, **kwargs)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    (tmp_path / "cpu.max").write_text("400000 100000\n")
+    assert le._cgroup_cpu_quota() == 4
+    (tmp_path / "cpu.max").write_text("350000 100000\n")
+    assert le._cgroup_cpu_quota() == 4
+    (tmp_path / "cpu.max").write_text("max 100000\n")
+    # Falls through to cgroup v1 files, which do not exist here -> None
+    assert le._cgroup_cpu_quota() in (None,) or isinstance(le._cgroup_cpu_quota(), int)

@@ -40,12 +40,13 @@ class LlamaCppEngine:
         self.model_path = path
         from llama_cpp import Llama
 
-        threads = n_threads or min(4, os_cpu_count())
+        threads = n_threads or llama_thread_count()
         print(f"[Llama] Loading {self.model_name} from {path} (n_ctx={n_ctx}, threads={threads})", flush=True)
         self.llm = Llama(
             model_path=path,
             n_ctx=n_ctx,
             n_threads=threads,
+            n_threads_batch=threads,
             n_batch=256,
             logits_all=False,
             verbose=False,
@@ -121,3 +122,58 @@ def os_cpu_count() -> int:
     import os
 
     return os.cpu_count() or 2
+
+
+def _cgroup_cpu_quota() -> Optional[int]:
+    """CPUs granted by the cgroup quota (Cloud Run, Docker --cpus), or None.
+
+    ``os.cpu_count()`` reports the host's cores inside a container; running that
+    many llama.cpp threads on a 4-vCPU quota oversubscribes and slows inference.
+    """
+    import math
+
+    try:
+        with open("/sys/fs/cgroup/cpu.max", "r", encoding="ascii") as handle:  # cgroup v2
+            quota, period = handle.read().split()[:2]
+        if quota != "max":
+            return max(1, math.ceil(int(quota) / int(period)))
+    except (OSError, ValueError):
+        pass
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r", encoding="ascii") as fq, open(
+            "/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r", encoding="ascii"
+        ) as fp:  # cgroup v1
+            quota, period = int(fq.read().strip()), int(fp.read().strip())
+        if quota > 0 and period > 0:
+            return max(1, math.ceil(quota / period))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def available_cpus() -> int:
+    """CPUs this process may actually use: min(affinity mask, cgroup quota)."""
+    import os
+
+    count = os_cpu_count()
+    try:
+        count = min(count, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        pass
+    quota = _cgroup_cpu_quota()
+    if quota is not None:
+        count = min(count, quota)
+    return max(1, count)
+
+
+def llama_thread_count() -> int:
+    """Threads for llama.cpp: ROSEGOLD_LLAMA_THREADS if set, else every usable CPU."""
+    import os
+
+    raw = os.getenv("ROSEGOLD_LLAMA_THREADS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return available_cpus()
