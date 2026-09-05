@@ -28,6 +28,7 @@ Rose Gold supports **5 distinct model execution backends**—ranging from high-t
   - [C. Google Cloud Run (Serverless CPU + GCS Storage)](#c-google-cloud-run-serverless-cpu--gcs-storage)
   - [D. Air-Gapped Hospital On-Premises (100% Offline & HIPAA Compliant)](#d-air-gapped-hospital-on-premises-100-offline--hipaa-compliant)
   - [E. Singularity & Apptainer (HPC / Academic Medical Centers)](#e-singularity--apptainer-hpc--academic-medical-centers)
+- [Security & Hardening](#security--hardening)
 - [Phenotypes & Custom Criteria](#phenotypes--custom-criteria)
 - [MIMIC-III-Ext-Notes Benchmark](#mimic-iii-ext-notes-benchmark)
 - [Troubleshooting & FAQ](#troubleshooting--faq)
@@ -225,6 +226,17 @@ python -m app.adjudicator \
 | `ROSEGOLD_LOAD_CPU_WEIGHTS` | `bool` | `0` | Set to `1` to load unquantized PyTorch Hugging Face weights directly into host RAM. |
 | `HF_TOKEN` | `str` | `null` | Hugging Face token for downloading gated models (Llama 3.1, Gemma 2). |
 | `GOOGLE_CLOUD_PROJECT` | `str` | `null` | Google Cloud Project ID for Vertex AI Gemini execution. |
+| `ROSEGOLD_API_KEY` | `str` | `null` | When set, every `/api/*` route requires `X-API-Key: <key>` (or `Authorization: Bearer <key>`). `/health` stays open. The dashboard reads the same variable. |
+| `ROSEGOLD_CORS_ORIGINS` | `str` | `null` | Comma-separated browser origins allowed to call the API. Unset = no cross-origin access (the dashboard talks to the API server-side, so it does not need this). |
+| `ROSEGOLD_MAX_BODY_BYTES` | `int` | `8388608` | Hard cap on any request body; larger requests get `413` before parsing. |
+| `ROSEGOLD_MAX_NOTES_CHARS` | `int` | `400000` | Maximum `notes_formatted_text` length accepted by `/api/adjudicate/single`. |
+| `ROSEGOLD_MAX_CRITERIA_CHARS` | `int` | `20000` | Maximum custom criteria length (request field and saved rule text). |
+| `ROSEGOLD_MAX_BATCH_VISITS` | `int` | `500` | Maximum visits per `/api/adjudicate/batch` call. |
+| `ROSEGOLD_TRUST_REMOTE_CODE` | `bool` | `0` | Pass `trust_remote_code=True` to vLLM. Off by default; Llama and Gemma do not need it. |
+| `ROSEGOLD_LLAMA_URL` | `str` | HF resolve URL | Override GGUF download URL. Must be `https://`. |
+| `ROSEGOLD_LLAMA_SHA256` | `str` | `null` | Pin the GGUF digest. Mismatched downloads or cached files are discarded. |
+| `ROSEGOLD_DOWNLOAD_TIMEOUT` | `float` | `120` | Socket timeout (seconds) for weight downloads. |
+| `ROSEGOLD_API_CONCURRENCY` | `int` | `64` | uvicorn `--limit-concurrency` used by the start scripts. |
 
 ---
 
@@ -472,12 +484,16 @@ gcloud config set project YOUR_PROJECT_ID
 ```
 
 What `deploy_to_gcp.sh` automates:
+- Refuses to deploy an uncommitted working tree (override with `ALLOW_DIRTY=1`).
 - Runs pre-flight test gates (`pytest tests/`).
-- Builds `Dockerfile.cpu` via Google Cloud Build.
-- Provisions a dedicated Cloud Storage bucket (`gs://${PROJECT_ID}-rosegold-data`).
-- Mounts GCS to Cloud Run at `/mnt/gcs` for persistent physician audit logs and batch outputs.
+- Builds `Dockerfile.cpu` via Google Cloud Build and tags the image with the git SHA (plus `:latest`); the SHA tag is what gets deployed, so every revision maps to a commit and can be rolled back exactly.
+- Provisions a dedicated Cloud Storage bucket (`gs://${PROJECT_ID}-rosegold-data`) with public-access prevention.
+- Creates a least-privilege runtime service account (`rosegold-runtime@…`) with only `storage.objectAdmin` on that bucket (plus `aiplatform.user` only when `LLM_BACKEND=vertex`), instead of the default compute service account.
+- Mounts GCS to Cloud Run at `/mnt/gcs` (owned by the container's unprivileged uid) for persistent physician audit logs and batch outputs.
 - Deploys Cloud Run with 4 vCPUs, 8GB RAM, and startup CPU boost.
 - Performs automated smoke tests against the Streamlit health endpoint.
+
+Useful knobs: `REQUIRE_AUTH=1` deploys with `--no-allow-unauthenticated` (IAM-gated UI), `ROSEGOLD_API_KEY=…` and `ROSEGOLD_LLAMA_SHA256=…` are passed through to the service, `DEPLOY_YES=1` skips the prompt.
 
 ---
 
@@ -637,6 +653,45 @@ singularity run --nv --bind $PWD:/workspace rosegold_gpu.sif
 singularity run --bind $PWD:/workspace rosegold_cpu.sif
 ```
 Access the dashboard at `http://localhost:8501` (or via SSH port forwarding: `ssh -L 8501:localhost:8501 user@cluster`).
+
+---
+
+## Security & Hardening
+
+Rose Gold handles clinical narrative, so the service is built to fail closed. What is in place:
+
+**API boundary (`app/api.py`)**
+- Request bodies are capped (`ROSEGOLD_MAX_BODY_BYTES`) by a pure-ASGI middleware that checks `Content-Length` and also counts streamed chunks, so a chunked upload cannot bypass the limit.
+- Every free-text field has an explicit length bound; visit-ID lists are bounded; confidence values must be in `[0, 1]`; blank conditions are rejected with `422`.
+- Caller-supplied dataset paths (`notes_path` / `visits_path`) must resolve, symlinks included, to a regular file strictly inside `ROSEGOLD_DATA_DIR`. Traversal, prefix collisions (`data_evil/…`), directories, and symlink escapes all return `400` rather than silently substituting the default dataset.
+- Unexpected exceptions are logged with a short correlation id and returned as a generic `500`; backend-unavailable conditions return `503`. Internal paths and stack traces never reach clients.
+- Optional shared-secret auth: set `ROSEGOLD_API_KEY` and every `/api/*` route requires `X-API-Key` (or `Authorization: Bearer`), compared in constant time. `/health` stays open for probes and reports `auth_required`.
+- CORS is closed unless `ROSEGOLD_CORS_ORIGINS` is set, and credentials are never combined with a wildcard origin.
+- Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, and `Cache-Control: no-store` on data routes.
+
+**Inference engine (`app/engine.py`, `app/prompts.py`)**
+- Backend initialization is guarded by a lock so concurrent first requests wait for a single load instead of racing a half-built engine; `/health` exposes `backend_initializing`.
+- llama.cpp / vLLM / HF generation is serialized behind an inference lock (those handles are not safe for concurrent `generate()` calls from uvicorn's threadpool).
+- vLLM `trust_remote_code` is **off** by default (`ROSEGOLD_TRUST_REMOTE_CODE=1` to opt in for a reviewed repo).
+- The system prompt states that notes and criteria are data, not instructions, and the output is schema-constrained, which limits prompt-injection impact to the rationale text.
+
+**Model weights (`app/model_store.py`)**
+- Downloads are `https://` only, streamed with a socket timeout to a `.part` file, then renamed atomically. Partial or undersized files are deleted.
+- `ROSEGOLD_LLAMA_SHA256` pins the digest; mismatching downloads and cached copies are discarded.
+- `ROSEGOLD_LLAMA_GGUF` is reduced to a bare filename so the env cannot smuggle directory components.
+
+**Storage (`app/storage.py`)**
+- Audit and batch JSONL readers skip blank or corrupt lines (a write interrupted mid-flush on a network mount) instead of taking the whole log offline. Writes are `fsync`ed.
+
+**Containers and deployment**
+- `Dockerfile.cpu` runs as an unprivileged user (uid 1000) and copies only the bundled synthetic cohort. Credentialed extracts under `data/mimic-iii-ext-notes*` never enter the image even when present locally; the Singularity definitions and the GPU `Dockerfile` follow the same rule. `.dockerignore` and `.gcloudignore` exclude them as a second layer.
+- `requirements.txt` carries upper bounds so a fresh build cannot pull an unreviewed major release.
+- The start scripts supervise both processes: if uvicorn or Streamlit exits, the container exits so the platform restarts it (rather than serving a UI whose API is gone and silently loading a second model in-process). uvicorn runs with `--no-server-header` and a concurrency limit.
+- Cloud Run deploys run as a dedicated least-privilege service account, use an immutable git-SHA image tag, and refuse to ship an uncommitted tree. See [Deployment Topologies](#c-google-cloud-run-serverless-cpu--gcs-storage).
+
+Regression coverage for all of the above lives in `tests/test_security_hardening.py`.
+
+**Out of scope / still your responsibility:** the public Cloud Run URL is unauthenticated by default (`REQUIRE_AUTH=1` flips it), there is no per-client rate limiting, and the bundled Streamlit dashboard has no user login. Do not put PHI behind the default public deployment.
 
 ---
 

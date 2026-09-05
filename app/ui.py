@@ -119,6 +119,12 @@ st.markdown("""
 # ---------------------------------------------------------
 API_BASE_URL = os.getenv("ROSEGOLD_API_URL", "http://localhost:8000")
 
+
+def _api_headers():
+    """Shared-secret header when the API is protected by ROSEGOLD_API_KEY."""
+    key = os.getenv("ROSEGOLD_API_KEY", "").strip()
+    return {"X-API-Key": key} if key else {}
+
 @st.cache_data(ttl=5)
 def check_api():
     try:
@@ -234,7 +240,7 @@ if "custom_criteria" not in st.session_state:
     saved_criteria = None
     if api_online:
         try:
-            resp = requests.get(f"{API_BASE_URL}/api/criteria", timeout=10)
+            resp = requests.get(f"{API_BASE_URL}/api/criteria", headers=_api_headers(), timeout=10)
             if resp.status_code == 200:
                 saved_criteria = resp.json().get("text")
         except Exception:
@@ -266,6 +272,7 @@ def adjudicate_record(record, condition, criteria):
     if api_online:
         resp = requests.post(
             f"{API_BASE_URL}/api/adjudicate/single",
+            headers=_api_headers(),
             json={
                 "visit_occurrence_id": record.get("visit_occurrence_id"),
                 "person_id": record.get("person_id"),
@@ -285,6 +292,7 @@ def adjudicate_cohort(recs, condition, criteria):
         try:
             resp = requests.post(
                 f"{API_BASE_URL}/api/adjudicate/batch",
+                headers=_api_headers(),
                 json={
                     "target_condition": condition,
                     "clinical_criteria": criteria,
@@ -365,9 +373,9 @@ with tab_review:
     with col_notes_view:
         st.markdown(f"### 📄 Medical Record Timeline (Visit `{selected_vid}`)")
         st.markdown(
-            f"<span class='metric-badge'>👤 Person ID: {selected_record['person_id']}</span>"
-            f"<span class='metric-badge'>📅 {selected_record['visit_start_date']} to {selected_record['visit_end_date']}</span>"
-            f"<span class='metric-badge'>📝 {selected_record['note_count']} Notes</span>",
+            f"<span class='metric-badge'>👤 Person ID: {html.escape(str(selected_record['person_id']))}</span>"
+            f"<span class='metric-badge'>📅 {html.escape(str(selected_record['visit_start_date']))} to {html.escape(str(selected_record['visit_end_date']))}</span>"
+            f"<span class='metric-badge'>📝 {html.escape(str(selected_record['note_count']))} Notes</span>",
             unsafe_allow_html=True
         )
 
@@ -482,7 +490,7 @@ with tab_review:
                 saved_via = "local store"
                 if api_online:
                     try:
-                        resp = requests.post(f"{API_BASE_URL}/api/feedback", json=log_entry, timeout=20)
+                        resp = requests.post(f"{API_BASE_URL}/api/feedback", headers=_api_headers(), json=log_entry, timeout=20)
                         if resp.status_code == 200:
                             payload = resp.json()
                             saved_via = "GCS" if payload.get("durable") else payload.get("path", "API")
@@ -504,7 +512,7 @@ with tab_calib:
     sample_eval_data = []
     if api_online:
         try:
-            resp = requests.get(f"{API_BASE_URL}/api/audit", timeout=10)
+            resp = requests.get(f"{API_BASE_URL}/api/audit", headers=_api_headers(), timeout=10)
             if resp.status_code == 200:
                 sample_eval_data = resp.json().get("entries") or []
         except Exception:
@@ -568,7 +576,7 @@ with tab_batch:
         persisted = []
         if api_online:
             try:
-                resp = requests.get(f"{API_BASE_URL}/api/batch", timeout=10)
+                resp = requests.get(f"{API_BASE_URL}/api/batch", headers=_api_headers(), timeout=10)
                 if resp.status_code == 200:
                     persisted = resp.json().get("results") or []
             except Exception:
@@ -650,7 +658,7 @@ with tab_rules:
         path = None
         if api_online:
             try:
-                resp = requests.post(f"{API_BASE_URL}/api/criteria", json={"text": rule_text}, timeout=20)
+                resp = requests.post(f"{API_BASE_URL}/api/criteria", headers=_api_headers(), json={"text": rule_text}, timeout=20)
                 if resp.status_code == 200:
                     payload = resp.json()
                     path = payload.get("path")

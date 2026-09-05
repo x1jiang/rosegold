@@ -1,6 +1,7 @@
 import pytest
 from app.schemas import RoseGoldAdjudication, ClinicalEvidence
-from app.instructor_engine import InstructorLlamaAdjudicator
+pytest.importorskip("instructor")
+from app.instructor_engine import InstructorLlamaAdjudicator  # noqa: E402
 from pydantic import ValidationError
 
 def test_instructor_schema_validation():

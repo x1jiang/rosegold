@@ -8,8 +8,11 @@ Paths are resolved at call time so deploy env vars take effect.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("rosegold.storage")
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -139,16 +142,37 @@ def append_audit(entry: Dict[str, Any]) -> str:
     return path
 
 
-def read_audit() -> List[Dict[str, Any]]:
-    path = audit_log_path()
+def _read_jsonl(path: str) -> List[Dict[str, Any]]:
+    """Read a JSON-lines file, skipping blank or corrupt lines.
+
+    A single truncated line (e.g. a write interrupted mid-flush on a network
+    mount) must not take the whole audit log or batch view offline.
+    """
     if not os.path.exists(path):
         return []
     rows: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as handle:
+    skipped = 0
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                skipped += 1
+                continue
+            if isinstance(item, dict):
+                rows.append(item)
+            else:
+                skipped += 1
+    if skipped:
+        logger.warning("Skipped %d malformed line(s) in %s", skipped, path)
     return rows
+
+
+def read_audit() -> List[Dict[str, Any]]:
+    return _read_jsonl(audit_log_path())
 
 
 def save_batch_results(results: List[Dict[str, Any]], target_condition: str) -> Dict[str, str]:
@@ -178,15 +202,7 @@ def save_batch_results(results: List[Dict[str, Any]], target_condition: str) -> 
 
 
 def load_batch_results() -> List[Dict[str, Any]]:
-    path = batch_jsonl_path()
-    if not os.path.exists(path):
-        return []
-    rows: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
+    return _read_jsonl(batch_jsonl_path())
 
 
 def save_criteria(text: str) -> str:
@@ -199,8 +215,12 @@ def load_criteria() -> Optional[str]:
     path = criteria_path()
     if not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as handle:
-        text = handle.read().strip()
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read().strip()
+    except OSError as exc:
+        logger.warning("Could not read criteria file %s: %s", path, exc)
+        return None
     return text or None
 
 

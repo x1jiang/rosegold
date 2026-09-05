@@ -23,3 +23,5 @@ scripts/open_outlook_draft*
 *.applescript
 .loopx/
 .codex/
+.gstack/
+.unlazy/

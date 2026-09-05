@@ -4,7 +4,8 @@ import json
 import pandas as pd
 from app.omop_loader import load_omop_data
 from app.engine import AdjudicationEngine
-from app.instructor_engine import InstructorLlamaAdjudicator
+pytest.importorskip("instructor")
+from app.instructor_engine import InstructorLlamaAdjudicator  # noqa: E402
 from app.concordance import calculate_concordance_metrics
 from app.omop_export import export_to_omop_observation
 

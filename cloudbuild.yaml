@@ -1,16 +1,24 @@
+# Builds the CPU image and pushes it under an immutable tag (_TAG, normally the
+# git short SHA) plus :latest. deploy_to_gcp.sh deploys the immutable tag so a
+# revision can always be traced back to a commit and rolled back exactly.
+substitutions:
+  _TAG: latest
+  _IMAGE: gcr.io/$PROJECT_ID/rosegold
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
       - build
+      - --pull
       - -f
       - Dockerfile.cpu
       - -t
-      - gcr.io/$PROJECT_ID/rosegold:latest
+      - ${_IMAGE}:${_TAG}
+      - -t
+      - ${_IMAGE}:latest
       - .
-  - name: gcr.io/cloud-builders/docker
-    args:
-      - push
-      - gcr.io/$PROJECT_ID/rosegold:latest
 images:
-  - gcr.io/$PROJECT_ID/rosegold:latest
-timeout: 1200s
+  - ${_IMAGE}:${_TAG}
+  - ${_IMAGE}:latest
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1500s

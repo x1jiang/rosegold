@@ -10,7 +10,9 @@ From: vllm/vllm-openai:latest
     requirements.txt /workspace/requirements.txt
     app /workspace/app
     configs /workspace/configs
-    data /workspace/data
+    data/synthetic_notes.csv /workspace/data/synthetic_notes.csv
+    data/synthetic_visits.csv /workspace/data/synthetic_visits.csv
+    data/synthetic_mimic_ext_notes /workspace/data/synthetic_mimic_ext_notes
     start_services.sh /workspace/start_services.sh
 
 %environment
