@@ -49,7 +49,7 @@ def export_to_omop_observation(adjudications: List[Dict[str, Any]], target_condi
             "observation_source_value": f"Rose Gold LLM: {target_condition}",
             "observation_source_concept_id": 0,
             "unit_source_value": "confidence_probability",
-            "qualifier_source_value": adj.get("clinical_rationale", "")[:250]
+            "qualifier_source_value": str(adj.get("clinical_rationale") or "")[:250]
         })
 
     return pd.DataFrame(obs_rows)

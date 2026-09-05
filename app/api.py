@@ -11,8 +11,14 @@ Hardening notes
 * Unexpected exceptions are logged with a correlation id and returned as a generic
   500 so internal paths and stack traces never reach clients.
 * Optional shared-secret auth: set ``ROSEGOLD_API_KEY`` and every ``/api/*`` route
-  requires ``X-API-Key`` (or ``Authorization: Bearer``).
+  requires ``X-API-Key`` (or ``Authorization: Bearer``). When a key is configured,
+  ``/health`` hides filesystem paths and backend error text from unauthenticated callers.
 * CORS is closed by default; opt in with ``ROSEGOLD_CORS_ORIGINS``.
+* Every response carries ``X-Request-ID`` (echoed from the caller when well-formed,
+  generated otherwise); the same id is used in error logs and 500 bodies.
+* Optional per-client rate limit (``ROSEGOLD_RATE_LIMIT_PER_MIN``) on ``/api/*``.
+* ``/ready`` returns 503 until the configured LLM backend is actually serving, so an
+  orchestrator never routes traffic to an instance that would answer with 503s.
 """
 
 from __future__ import annotations
@@ -21,10 +27,13 @@ import datetime
 import hmac
 import logging
 import os
+import re
 import secrets
 import threading
+import time
+from collections import deque
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,8 +42,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.config_loader import resolve_criteria
 from app.engine import AdjudicationEngine
+from app.logging_setup import configure_logging
 from app.mimic_ext_notes import MimicExtNotesError, looks_like_mimic_ext_notes_path
 from app.omop_loader import load_omop_data, load_visit_index
+from app.paths import UnsafePathError, resolve_data_file
 from app.schemas import RoseGoldAdjudication
 from app.storage import (
     append_audit,
@@ -50,6 +61,7 @@ from app.storage import (
     storage_status,
 )
 
+configure_logging()
 logger = logging.getLogger("rosegold.api")
 
 # ---------------------------------------------------------------------------
@@ -77,6 +89,8 @@ MAX_CONDITION_CHARS = 200
 MAX_SHORT_TEXT = 256
 MAX_COMMENT_CHARS = 4_000
 MAX_PATH_CHARS = 1_024
+# 0 disables the limiter (default). Applies per client IP to /api/* only.
+RATE_LIMIT_PER_MIN = _int_env("ROSEGOLD_RATE_LIMIT_PER_MIN", 0, minimum=0)
 
 
 def _api_key() -> str:
@@ -84,16 +98,26 @@ def _api_key() -> str:
     return os.getenv("ROSEGOLD_API_KEY", "").strip()
 
 
-def require_api_key(request: Request) -> None:
-    expected = _api_key()
-    if not expected:
-        return
+def _supplied_key(request: Request) -> str:
     supplied = request.headers.get("x-api-key", "")
     if not supplied:
         auth = request.headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
             supplied = auth[7:].strip()
-    if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+    return supplied
+
+
+def _is_authenticated(request: Request) -> bool:
+    """True when no key is configured (open deployment) or the caller presented the right one."""
+    expected = _api_key()
+    if not expected:
+        return True
+    supplied = _supplied_key(request)
+    return bool(supplied) and hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+
+
+def require_api_key(request: Request) -> None:
+    if not _is_authenticated(request):
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
 
@@ -180,6 +204,46 @@ class BodySizeLimitMiddleware:
                 await self._reject(send)
 
 
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _request_id_from_scope(scope) -> str:
+    return (scope.get("state") or {}).get("request_id") or ""
+
+
+class RequestIDMiddleware:
+    """Attach a request id to every request/response.
+
+    A well-formed inbound ``X-Request-ID`` (load balancer, Cloud Run, client) is
+    reused so logs can be joined across hops; anything else is replaced with a
+    fresh random id. The id is stored in ``scope["state"]`` for handlers.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        inbound = ""
+        for name, value in scope.get("headers") or []:
+            if name == b"x-request-id":
+                inbound = value.decode("latin-1", "replace")
+                break
+        request_id = inbound if _REQUEST_ID_RE.match(inbound) else secrets.token_hex(8)
+        scope.setdefault("state", {})["request_id"] = request_id
+
+        async def send_with_id(message):
+            if message.get("type") == "http.response.start":
+                headers = [(k, v) for k, v in (message.get("headers") or []) if k.lower() != b"x-request-id"]
+                headers.append((b"x-request-id", request_id.encode("ascii")))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_id)
+
+
 class SecurityHeadersMiddleware:
     """Defensive response headers. ``/docs`` keeps framing/caching defaults so Swagger works."""
 
@@ -189,6 +253,9 @@ class SecurityHeadersMiddleware:
         (b"referrer-policy", b"no-referrer"),
         (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
     )
+    # Pure JSON routes never need to load anything; a locked-down CSP makes a
+    # reflected-content bug on them unexploitable in a browser.
+    _API_CSP = b"default-src 'none'; frame-ancestors 'none'"
 
     def __init__(self, app):
         self.app = app
@@ -198,7 +265,7 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        no_store = path.startswith("/api/") or path == "/health"
+        api_route = path.startswith("/api/") or path in ("/health", "/ready")
 
         async def send_with_headers(message):
             if message.get("type") == "http.response.start":
@@ -207,12 +274,88 @@ class SecurityHeadersMiddleware:
                 for key, value in self._STATIC:
                     if key not in present:
                         headers.append((key, value))
-                if no_store and b"cache-control" not in present:
-                    headers.append((b"cache-control", b"no-store"))
+                if api_route:
+                    if b"cache-control" not in present:
+                        headers.append((b"cache-control", b"no-store"))
+                    if b"content-security-policy" not in present:
+                        headers.append((b"content-security-policy", self._API_CSP))
                 message["headers"] = headers
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+class RateLimitMiddleware:
+    """Fixed-window per-client limiter for ``/api/*``; 429 with ``Retry-After`` when exceeded.
+
+    In-memory and per-process, which matches the single-worker deployment used
+    here. Client identity is the transport peer address; ``X-Forwarded-For`` is
+    honoured only when ``ROSEGOLD_TRUST_PROXY=1`` because otherwise any caller
+    could spoof their way past the limit.
+    """
+
+    def __init__(self, app, per_minute: int, trust_proxy: Optional[bool] = None, max_clients: int = 10_000):
+        self.app = app
+        self.per_minute = int(per_minute)
+        self.trust_proxy = (
+            trust_proxy
+            if trust_proxy is not None
+            else os.getenv("ROSEGOLD_TRUST_PROXY", "").lower() in {"1", "true", "yes"}
+        )
+        self.max_clients = max_clients
+        self._hits: Dict[str, Deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def _client_key(self, scope) -> str:
+        if self.trust_proxy:
+            for name, value in scope.get("headers") or []:
+                if name == b"x-forwarded-for":
+                    first = value.decode("latin-1", "replace").split(",")[0].strip()
+                    if first:
+                        return first[:64]
+                    break
+        client = scope.get("client") or ("unknown", 0)
+        return str(client[0])
+
+    def _allow(self, key: str, now: float) -> tuple[bool, float]:
+        window = 60.0
+        with self._lock:
+            bucket = self._hits.get(key)
+            if bucket is None:
+                if len(self._hits) >= self.max_clients:
+                    # Evict the stalest client rather than grow without bound.
+                    stalest = min(self._hits, key=lambda k: self._hits[k][-1] if self._hits[k] else 0.0)
+                    self._hits.pop(stalest, None)
+                bucket = deque()
+                self._hits[key] = bucket
+            while bucket and now - bucket[0] >= window:
+                bucket.popleft()
+            if len(bucket) >= self.per_minute:
+                return False, max(1.0, window - (now - bucket[0]))
+            bucket.append(now)
+            return True, 0.0
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or self.per_minute <= 0 or not scope.get("path", "").startswith("/api/"):
+            await self.app(scope, receive, send)
+            return
+        allowed, retry_after = self._allow(self._client_key(scope), time.monotonic())
+        if allowed:
+            await self.app(scope, receive, send)
+            return
+        body = b'{"detail":"Rate limit exceeded."}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 429,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"retry-after", str(int(retry_after + 0.999)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 app = FastAPI(
@@ -234,13 +377,27 @@ if _cors_origins:
     )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
+app.add_middleware(RateLimitMiddleware, per_minute=RATE_LIMIT_PER_MIN)
+# Outermost so every response, including 413/429 short-circuits, carries the id.
+app.add_middleware(RequestIDMiddleware)
+
+
+def _error_id(request: Request) -> str:
+    rid = _request_id_from_scope(request.scope)
+    return rid or secrets.token_hex(6)
 
 
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    error_id = secrets.token_hex(6)
+    error_id = _error_id(request)
     logger.exception("Unhandled error %s on %s %s", error_id, request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error.", "error_id": error_id})
+    # Starlette's ServerErrorMiddleware sends this response outside the user
+    # middleware stack, so the request-id header has to be set here explicitly.
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error.", "error_id": error_id},
+        headers={"X-Request-ID": error_id, "Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -249,24 +406,17 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 
 def _safe_data_path(user_path: Optional[str], default_path: str) -> str:
-    """Resolve a caller-supplied dataset path or reject it.
+    """Resolve a caller-supplied dataset path or reject it with 400.
 
-    The resolved (symlink-free) path must be a regular file strictly inside
-    ``DATA_DIR``. ``DATA_DIR + "_evil"`` style prefix collisions and ``..``
-    traversal are both rejected.
+    Delegates to :func:`app.paths.resolve_data_file`: the resolved (symlink-free)
+    path must be a regular ``.csv``/``.parquet`` file strictly inside ``DATA_DIR``.
     """
     if not user_path:
         return default_path
-    if len(user_path) > MAX_PATH_CHARS or "\x00" in user_path:
-        raise HTTPException(status_code=400, detail="Invalid data path.")
-    candidate = os.path.realpath(user_path)
     try:
-        inside = os.path.commonpath([DATA_DIR, candidate]) == DATA_DIR
-    except ValueError:
-        inside = False
-    if not inside or candidate == DATA_DIR or not os.path.isfile(candidate):
+        return resolve_data_file(user_path, root=DATA_DIR)
+    except UnsafePathError:
         raise HTTPException(status_code=400, detail="Data path must be a file inside the configured data directory.")
-    return candidate
 
 
 def _load_records(notes_path: str, visits_path: str, target_visits: Optional[List[int]]) -> List[Dict[str, Any]]:
@@ -279,18 +429,26 @@ def _load_records(notes_path: str, visits_path: str, target_visits: Optional[Lis
         raise HTTPException(status_code=400, detail="Dataset is malformed or missing required columns.")
 
 
-def _run_engine(fn, *args):
-    """Run an engine call, mapping backend-unavailable to 503 and everything else to a logged 500."""
+def _run_engine(request: Request, fn, *args):
+    """Run an engine call, mapping backend-unavailable to 503 and everything else to a logged 500.
+
+    Backend error text can contain URLs, filesystem paths or library internals,
+    so it is logged with the request id and never echoed to the client.
+    """
+    error_id = _error_id(request)
     try:
         return fn(*args)
     except RuntimeError as exc:
-        # Engine raises RuntimeError only for "no real backend" conditions; message is operational, not sensitive.
-        raise HTTPException(status_code=503, detail=f"Adjudication backend unavailable: {str(exc)[:300]}")
+        logger.error("Adjudication backend unavailable (request %s): %s", error_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Adjudication backend unavailable. Check /ready or the service logs.",
+            headers={"Retry-After": "30"},
+        )
     except HTTPException:
         raise
     except Exception:
-        error_id = secrets.token_hex(6)
-        logger.exception("Adjudication failed (error %s)", error_id)
+        logger.exception("Adjudication failed (request %s)", error_id)
         raise HTTPException(status_code=500, detail=f"Adjudication error (id {error_id}).")
 
 
@@ -366,35 +524,87 @@ def root():
     }
 
 
-@app.get("/health")
-def health_check():
+def _backend_snapshot() -> Dict[str, Any]:
     try:
         backend = engine.backend_status(init=False)
-        ready = True
-        status = "healthy"
-        error = backend.get("error")
+        backend["probe_ok"] = True
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Health probe failed")
-        backend = {"backend": "unavailable", "model_name": None, "llm_real": False}
-        ready = False
-        status = "degraded"
-        error = type(exc).__name__
-    return {
-        "status": status,
-        "engine_ready": ready,
+        backend = {"backend": "unavailable", "model_name": None, "llm_real": False, "error": type(exc).__name__, "probe_ok": False}
+    return backend
+
+
+def _backend_serving(backend: Dict[str, Any]) -> bool:
+    """True when the instance can answer adjudication requests without a 503.
+
+    Either a real LLM backend is loaded, or none was required (rules/mock mode).
+    """
+    if not backend.get("probe_ok", True):
+        return False
+    if engine.is_initializing:
+        return False
+    if engine.wants_real_backend():
+        return bool(backend.get("llm_real"))
+    return True
+
+
+@app.get("/health")
+def health_check(request: Request):
+    """Liveness plus a status summary.
+
+    Always 200 while the process is up. Filesystem paths, storage layout and raw
+    backend error text are only included for authenticated callers (or when no
+    API key is configured at all, i.e. a local/dev deployment).
+    """
+    backend = _backend_snapshot()
+    serving = _backend_serving(backend)
+    payload: Dict[str, Any] = {
+        "status": "healthy" if serving else "degraded",
+        "engine_ready": bool(backend.get("probe_ok", True)),
+        "ready": serving,
         "backend_initializing": engine.is_initializing,
         "vllm_active": engine.is_vllm_available,
         "backend": backend.get("backend"),
         "llm_real": bool(backend.get("llm_real")),
         "model_name": backend.get("model_name") or engine.model_name,
         "device": engine.hardware_info.get("device"),
-        "notes_file": NOTES_PATH,
-        "visits_file": VISITS_PATH,
-        "storage": storage_status(),
         "auth_required": bool(_api_key()),
-        "error": error,
+        "version": app.version,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+    if _is_authenticated(request):
+        payload.update(
+            {
+                "notes_file": NOTES_PATH,
+                "visits_file": VISITS_PATH,
+                "storage": storage_status(),
+                "error": backend.get("error"),
+            }
+        )
+    else:
+        payload["storage"] = {"durable": storage_status()["durable"]}
+    return payload
+
+
+@app.get("/ready")
+def readiness_check():
+    """Readiness probe: 200 only when adjudication requests would succeed right now.
+
+    Returns 503 while a required LLM backend is still loading or failed to load,
+    so load balancers / Cloud Run startup probes hold traffic instead of letting
+    clients collect 503s from ``/api/adjudicate/*``.
+    """
+    backend = _backend_snapshot()
+    serving = _backend_serving(backend)
+    body = {
+        "ready": serving,
+        "backend": backend.get("backend"),
+        "llm_real": bool(backend.get("llm_real")),
+        "backend_initializing": engine.is_initializing,
+    }
+    if serving:
+        return body
+    return JSONResponse(status_code=503, content=body, headers={"Retry-After": "10"})
 
 
 api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
@@ -429,7 +639,7 @@ def get_visit_notes(visit_occurrence_id: int):
 
 
 @api.post("/adjudicate/single", response_model=RoseGoldAdjudication)
-def adjudicate_single_visit(req: SingleAdjudicationRequest):
+def adjudicate_single_visit(req: SingleAdjudicationRequest, request: Request):
     """Adjudicates a single visit encounter either by ID or raw notes text."""
     if req.notes_formatted_text and req.notes_formatted_text.strip():
         record = {
@@ -448,11 +658,11 @@ def adjudicate_single_visit(req: SingleAdjudicationRequest):
         raise HTTPException(status_code=400, detail="Must provide either visit_occurrence_id or notes_formatted_text.")
 
     criteria = resolve_criteria(req.target_condition, req.clinical_criteria)
-    return _run_engine(engine.adjudicate_single, record, req.target_condition, criteria)
+    return _run_engine(request, engine.adjudicate_single, record, req.target_condition, criteria)
 
 
 @api.post("/adjudicate/batch", response_model=List[RoseGoldAdjudication])
-def adjudicate_batch_visits(req: BatchAdjudicationRequest):
+def adjudicate_batch_visits(req: BatchAdjudicationRequest, request: Request):
     """Executes high-throughput batch adjudication over multiple visits."""
     n_path = _safe_data_path(req.notes_path, NOTES_PATH)
     v_path = _safe_data_path(req.visits_path, VISITS_PATH)
@@ -472,7 +682,7 @@ def adjudicate_batch_visits(req: BatchAdjudicationRequest):
         save_batch_results(results, req.target_condition)
         return results
 
-    return _run_engine(_run)
+    return _run_engine(request, _run)
 
 
 @api.get("/audit")

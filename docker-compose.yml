@@ -1,22 +1,34 @@
-version: '3.8'
-
+# Rose Gold full stack (GPU / vLLM) for a single host.
+#
+# Ports are bound to loopback by default: put a TLS-terminating reverse proxy in
+# front, or change the bind address deliberately. Set ROSEGOLD_API_KEY in your
+# shell / .env so the API requires a shared secret even on the host.
 services:
   rosegold-service:
     build:
       context: .
       dockerfile: Dockerfile
-    image: rosegold-service:latest
+      args:
+        VLLM_TAG: ${VLLM_TAG:-latest}
+    image: rosegold-service:${VLLM_TAG:-latest}
     container_name: rosegold_platform
+    restart: unless-stopped
     environment:
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - CUDA_VISIBLE_DEVICES=0
       - ROSEGOLD_DATA_DIR=/workspace/data
-      - ROSEGOLD_MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
+      - ROSEGOLD_OUTPUT_DIR=/workspace/outputs
+      - ROSEGOLD_MODEL_NAME=${ROSEGOLD_MODEL_NAME:-meta-llama/Llama-3.1-8B-Instruct}
+      - ROSEGOLD_LLM_BACKEND=${ROSEGOLD_LLM_BACKEND:-}
+      - ROSEGOLD_API_KEY=${ROSEGOLD_API_KEY:-}
+      - ROSEGOLD_RATE_LIMIT_PER_MIN=${ROSEGOLD_RATE_LIMIT_PER_MIN:-0}
+      - ROSEGOLD_LOG_JSON=${ROSEGOLD_LOG_JSON:-0}
     ports:
-      - "8000:8000"   # FastAPI Backend
-      - "8501:8501"   # Streamlit Web Dashboard
+      - "${ROSEGOLD_BIND_ADDR:-127.0.0.1}:8000:8000"   # FastAPI Backend
+      - "${ROSEGOLD_BIND_ADDR:-127.0.0.1}:8501:8501"   # Streamlit Web Dashboard
     volumes:
-      - ./data:/workspace/data
+      # OMOP extracts are read-only inside the container; outputs are the only writable mount.
+      - ./data:/workspace/data:ro
       - ./outputs:/workspace/outputs
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     deploy:

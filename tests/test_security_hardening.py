@@ -200,7 +200,10 @@ def test_unhandled_exception_is_sanitized(client, monkeypatch):
     body = res.json()
     assert body["detail"] == "Internal server error."
     assert "secret" not in json.dumps(body)
-    assert len(body["error_id"]) == 12
+    # The correlation id in the body is the request id on the response so
+    # clients can quote one value and operators grep one value in the logs.
+    assert body["error_id"] == res.headers["x-request-id"]
+    assert len(body["error_id"]) >= 12
 
 
 def test_missing_visit_returns_404_not_500(client):

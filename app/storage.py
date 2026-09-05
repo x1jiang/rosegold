@@ -10,11 +10,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+import threading
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("rosegold.storage")
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Serialises writers inside this process. The API runs a single uvicorn worker,
+# so this is sufficient to keep audit lines from interleaving and to stop two
+# batch saves from racing each other's temp files.
+_WRITE_LOCK = threading.RLock()
 
 
 def output_dir() -> str:
@@ -89,15 +95,62 @@ def _fsync_path(path: str) -> None:
 
 
 def _flush_write(path: str, text: str, mode: str = "a") -> None:
+    """Append (``mode="a"``) or atomically replace (``mode="w"``) ``path``.
+
+    Whole-file writes go to a sibling temp file that is fsynced and then
+    ``os.replace``d over the target, so a crash mid-write leaves the previous
+    good file in place instead of a truncated one.
+    """
     ensure_output_dir()
-    with open(path, mode, encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
+    with _WRITE_LOCK:
+        if mode == "w":
+            _atomic_write_bytes(path, text.encode("utf-8"))
+            return
+        with open(path, mode, encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        _fsync_path(path)
+
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=os.path.basename(path), dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    except BaseException:
         try:
-            os.fsync(handle.fileno())
+            os.remove(tmp)
         except OSError:
             pass
-    _fsync_path(path)
+        raise
+    _fsync_path(parent)
+
+
+def _atomic_dataframe_write(frame, path: str, writer: str) -> None:
+    """Serialise ``frame`` via ``to_csv``/``to_parquet`` into memory, then write atomically."""
+    import io
+
+    if writer == "csv":
+        data = frame.to_csv(index=False).encode("utf-8")
+    elif writer == "parquet":
+        buffer = io.BytesIO()
+        frame.to_parquet(buffer, index=False)
+        data = buffer.getvalue()
+    else:  # pragma: no cover - programming error
+        raise ValueError(f"unknown writer {writer!r}")
+    _atomic_write_bytes(path, data)
 
 
 def normalize_audit(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -187,17 +240,16 @@ def save_batch_results(results: List[Dict[str, Any]], target_condition: str) -> 
         "omop": omop_obs_path(),
     }
     df = pd.DataFrame(results)
-    df.to_csv(paths["csv"], index=False)
-    _fsync_path(paths["csv"])
-    try:
-        df.to_parquet(paths["parquet"], index=False)
-        _fsync_path(paths["parquet"])
-    except Exception:
-        pass
-    _flush_write(paths["jsonl"], "".join(json.dumps(item) + "\n" for item in results), mode="w")
-    obs = export_to_omop_observation(results, target_condition)
-    obs.to_csv(paths["omop"], index=False)
-    _fsync_path(paths["omop"])
+    with _WRITE_LOCK:
+        _atomic_dataframe_write(df, paths["csv"], "csv")
+        try:
+            _atomic_dataframe_write(df, paths["parquet"], "parquet")
+        except Exception as exc:
+            # pyarrow missing or an unserialisable column; the CSV/JSONL copies are canonical.
+            logger.warning("Parquet export skipped: %s", type(exc).__name__)
+        _flush_write(paths["jsonl"], "".join(json.dumps(item) + "\n" for item in results), mode="w")
+        obs = export_to_omop_observation(results, target_condition)
+        _atomic_dataframe_write(obs, paths["omop"], "csv")
     return paths
 
 

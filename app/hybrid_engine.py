@@ -2,13 +2,26 @@
 Rose Gold Hybrid Clinical Adjudication Engine.
 Combines deterministic clinical NLP (clause segmentation & negation filtering)
 with deep clinical reasoning via Muse-Glimmer-30B on GPU.
+
+Hardening
+---------
+* There is **no default endpoint**. Clinical notes are sent to the Muse
+  completions URL, so it must be set explicitly via ``ROSEGOLD_MUSE_URL``.
+* The URL must be ``https://``. Plain ``http://`` is accepted only for loopback
+  hosts, or when ``ROSEGOLD_MUSE_ALLOW_HTTP=1`` is set for a private network.
+* ``ROSEGOLD_MUSE_API_KEY`` (optional) is sent as a bearer token.
+* When the LLM call fails, the result is labelled ``hybrid:rules_only(...)`` with
+  a reduced confidence instead of claiming an LLM verification that never ran.
 """
 
 from __future__ import annotations
 
 import datetime
+import ipaddress
 import json
+import logging
 import os
+import urllib.parse
 from typing import Any, Dict, List, Optional
 import requests
 
@@ -16,8 +29,65 @@ from app.clinical_rules import adjudicate_clinical_rules
 from app.prompts import build_adjudication_prompt
 from app.schemas import RoseGoldAdjudication
 
-DEFAULT_MUSE_URL = os.getenv("ROSEGOLD_MUSE_URL", "http://129.106.31.72:7790/v1/completions")
-DEFAULT_MODEL_NAME = os.getenv("ROSEGOLD_MUSE_MODEL", "Muse-Glimmer-30B")
+logger = logging.getLogger("rosegold.hybrid")
+
+DEFAULT_MODEL_NAME = "Muse-Glimmer-30B"
+RULES_ONLY_CONFIDENCE = 0.70
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _allow_http() -> bool:
+    return os.getenv("ROSEGOLD_MUSE_ALLOW_HTTP", "").lower() in {"1", "true", "yes"}
+
+
+def _is_loopback(host: Optional[str]) -> bool:
+    if not host:
+        return False
+    if host.lower() in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_muse_url(url: Optional[str]) -> str:
+    """Return ``url`` if it is an acceptable place to send clinical text, else raise ``ValueError``."""
+    text = (url or "").strip()
+    if not text:
+        raise ValueError(
+            "ROSEGOLD_MUSE_URL is not set. The hybrid backend has no default endpoint; "
+            "point it at your Muse/vLLM completions URL."
+        )
+    parsed = urllib.parse.urlparse(text)
+    if not parsed.netloc or parsed.scheme not in {"http", "https"}:
+        raise ValueError("ROSEGOLD_MUSE_URL must be an absolute http(s) URL.")
+    if parsed.scheme == "http" and not (_is_loopback(parsed.hostname) or _allow_http()):
+        raise ValueError(
+            "ROSEGOLD_MUSE_URL uses plain http:// to a non-loopback host. Use https://, "
+            "or set ROSEGOLD_MUSE_ALLOW_HTTP=1 if the endpoint is on a trusted private network."
+        )
+    return text
+
+
+def muse_url() -> str:
+    return validate_muse_url(os.getenv("ROSEGOLD_MUSE_URL"))
+
+
+def muse_model_name() -> str:
+    return os.getenv("ROSEGOLD_MUSE_MODEL", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+
+
+def muse_timeout() -> float:
+    try:
+        return max(1.0, float(os.getenv("ROSEGOLD_MUSE_TIMEOUT", "25")))
+    except ValueError:
+        return 25.0
+
+
+def _auth_headers() -> Dict[str, str]:
+    key = os.getenv("ROSEGOLD_MUSE_API_KEY", "").strip()
+    return {"Authorization": f"Bearer {key}"} if key else {}
 
 
 class HybridAdjudicationEngine:
@@ -25,11 +95,13 @@ class HybridAdjudicationEngine:
         self,
         endpoint_url: Optional[str] = None,
         model_name: Optional[str] = None,
-        timeout: int = 25,
+        timeout: Optional[float] = None,
+        session: Optional[requests.Session] = None,
     ):
-        self.endpoint_url = endpoint_url or DEFAULT_MUSE_URL
-        self.model_name = model_name or DEFAULT_MODEL_NAME
-        self.timeout = timeout
+        self.endpoint_url = validate_muse_url(endpoint_url) if endpoint_url else muse_url()
+        self.model_name = model_name or muse_model_name()
+        self.timeout = float(timeout) if timeout is not None else muse_timeout()
+        self._session = session or requests.Session()
 
     def adjudicate_batch(
         self,
@@ -74,9 +146,12 @@ class HybridAdjudicationEngine:
 
         muse_present = rule_present
         muse_explanation = ""
+        llm_verified = False
+        llm_failure = ""
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 self.endpoint_url,
+                headers=_auth_headers(),
                 json={
                     "model": self.model_name,
                     "prompt": full_prompt,
@@ -87,7 +162,7 @@ class HybridAdjudicationEngine:
                 timeout=self.timeout,
             )
             if resp.status_code == 200:
-                raw_text = resp.json()["choices"][0]["text"].strip()
+                raw_text = str(resp.json()["choices"][0]["text"]).strip()
                 full_json_str = "{\"condition_present\":" + raw_text + "}"
                 if raw_text.lower().startswith("true"):
                     muse_present = True
@@ -97,7 +172,18 @@ class HybridAdjudicationEngine:
                     parsed = json.loads(full_json_str)
                     muse_present = bool(parsed.get("condition_present", False))
                 muse_explanation = raw_text
-        except Exception:
+                llm_verified = True
+            else:
+                llm_failure = f"http_{resp.status_code}"
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+            llm_failure = type(exc).__name__
+        if not llm_verified:
+            # Log at warning level but never include note text or the raw prompt.
+            logger.warning(
+                "Muse LLM verification unavailable for visit %s (%s); falling back to rules-only verdict",
+                record.get("visit_occurrence_id"),
+                llm_failure or "unknown",
+            )
             muse_present = rule_present
 
         # Tier 3: Consensus Arbitration
@@ -113,19 +199,26 @@ class HybridAdjudicationEngine:
 
         status = "CONFIRMED_POSITIVE" if final_present else "CONFIRMED_NEGATIVE"
         rationale = rule_res.get("clinical_rationale", "")
-        if muse_explanation:
-            rationale += f" [Muse LLM Verification: {muse_explanation[:180]}]"
+        if llm_verified:
+            if muse_explanation:
+                rationale += f" [Muse LLM Verification: {muse_explanation[:180]}]"
+            confidence = 0.95 if final_present else 0.96
+            backend_tag = f"hybrid:{self.model_name}"
+        else:
+            rationale += " [Muse LLM unavailable; verdict is from deterministic rules only and needs physician review]"
+            confidence = RULES_ONLY_CONFIDENCE
+            backend_tag = f"hybrid:rules_only({llm_failure or 'llm_unavailable'})"
 
         payload = {
             "person_id": record["person_id"],
             "visit_occurrence_id": record["visit_occurrence_id"],
             "condition_present": final_present,
             "phenotype_status": status,
-            "confidence_score": 0.95 if final_present else 0.96,
+            "confidence_score": confidence,
             "primary_criteria_met": rule_res.get("primary_criteria_met", []),
             "key_evidence": rule_res.get("key_evidence", []),
             "clinical_rationale": rationale,
             "adjudication_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "inference_backend": f"hybrid:{self.model_name}",
+            "inference_backend": backend_tag,
         }
         return RoseGoldAdjudication(**payload).model_dump()

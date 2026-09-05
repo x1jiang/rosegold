@@ -1,13 +1,17 @@
 import os
 import json
 import datetime
+import logging
 import threading
+import time
 from typing import List, Dict, Any, Optional
 
 from app.schemas import RoseGoldAdjudication
 from app.prompts import build_adjudication_prompt, build_chat_prompt
 from app.model_selector import resolve_model_and_engine
 from app.config_loader import pipeline_settings
+
+logger = logging.getLogger("rosegold.engine")
 
 
 def _allow_mock() -> bool:
@@ -16,6 +20,18 @@ def _allow_mock() -> bool:
 
 def _backend_name() -> str:
     return os.getenv("ROSEGOLD_LLM_BACKEND", "").lower().strip()
+
+
+def _retry_cooldown_seconds() -> float:
+    """How long to wait before re-attempting a failed backend load (default 60s).
+
+    A transient failure at cold start (weight download timeout, Vertex IAM not yet
+    propagated) must not leave the instance answering 503 until someone restarts it.
+    """
+    try:
+        return max(5.0, float(os.getenv("ROSEGOLD_BACKEND_RETRY_SECONDS", "60")))
+    except ValueError:
+        return 60.0
 
 
 def _trust_remote_code() -> bool:
@@ -78,6 +94,7 @@ class AdjudicationEngine:
         self._backend_initialized = False
         self._backend_ready = False
         self._initializing = False
+        self._next_retry_at: Optional[float] = None
         self._init_lock = threading.Lock()
         # llama.cpp / vLLM / HF handles are not safe for concurrent generate()
         # calls; uvicorn runs sync endpoints on a threadpool, so serialize.
@@ -87,6 +104,19 @@ class AdjudicationEngine:
     @property
     def is_initializing(self) -> bool:
         return self._initializing
+
+    def wants_real_backend(self) -> bool:
+        """True when configuration demands a real LLM and forbids the rules fallback."""
+        return (_want_llamacpp() or _want_vertex() or _want_hybrid()) and not _allow_mock()
+
+    def has_real_backend(self) -> bool:
+        return bool(
+            (self.is_vllm_available and self.llm is not None)
+            or self.cpu_engine is not None
+            or self.llama_engine is not None
+            or self.hybrid_engine is not None
+            or self.vertex_engine is not None
+        )
 
     def backend_status(self, init: bool = False) -> Dict[str, Any]:
         if init:
@@ -113,10 +143,10 @@ class AdjudicationEngine:
                 "model_name": self.vertex_engine.model_name,
                 "llm_real": True,
             }
-        if _want_llamacpp() and not self._backend_ready:
+        if self.wants_real_backend() and not self._backend_ready:
             return {
                 "backend": "loading",
-                "model_name": "Llama-3.2-3B-Instruct (loading)",
+                "model_name": f"{_backend_name() or 'llamacpp'} (loading)",
                 "llm_real": False,
             }
         return {
@@ -126,16 +156,25 @@ class AdjudicationEngine:
             "error": self.backend_error,
         }
 
+    def _retry_due(self) -> bool:
+        return (
+            self._next_retry_at is not None
+            and time.monotonic() >= self._next_retry_at
+            and not self.has_real_backend()
+        )
+
     def _init_backend(self):
         """Load vLLM, HF CPU weights, llama.cpp, hybrid, or Vertex Gemini on first use.
 
         Guarded by a lock so concurrent first requests wait for one load instead
-        of racing a half-initialized engine.
+        of racing a half-initialized engine. If a required backend failed to load,
+        the attempt is repeated after a cooldown instead of pinning the instance
+        in a permanently degraded state.
         """
-        if self._backend_ready:
+        if self._backend_ready and not self._retry_due():
             return
         with self._init_lock:
-            if self._backend_initialized:
+            if self._backend_initialized and not self._retry_due():
                 return
             self._backend_initialized = True
             self._initializing = True
@@ -144,6 +183,16 @@ class AdjudicationEngine:
             finally:
                 self._initializing = False
                 self._backend_ready = True
+                if self.wants_real_backend() and not self.has_real_backend():
+                    self._next_retry_at = time.monotonic() + _retry_cooldown_seconds()
+                    logger.warning(
+                        "Required LLM backend '%s' is unavailable (%s); will retry in %.0fs",
+                        _backend_name(),
+                        self.backend_error or "unknown error",
+                        _retry_cooldown_seconds(),
+                    )
+                else:
+                    self._next_retry_at = None
 
     def _init_backend_locked(self):
         settings = pipeline_settings()
@@ -158,7 +207,7 @@ class AdjudicationEngine:
                     extra_kwargs = {}
                     if self.quantization:
                         extra_kwargs["quantization"] = self.quantization
-                    print(f"[Engine] Loading vLLM engine: {self.model_name}")
+                    logger.info("Loading vLLM engine: %s", self.model_name)
                     llm_kwargs = dict(
                         model=self.model_name,
                         tensor_parallel_size=self.tensor_parallel_size,
@@ -172,9 +221,9 @@ class AdjudicationEngine:
                     except TypeError:
                         self.llm = LLM(**llm_kwargs)
                     self.is_vllm_available = True
-                    print("[Engine] vLLM engine successfully initialized.")
+                    logger.info("vLLM engine initialized.")
             except Exception as e:
-                print(f"[Engine] Could not initialize vLLM ({e}).")
+                logger.warning("Could not initialize vLLM: %s", e)
                 self.is_vllm_available = False
                 self.backend_error = str(e)
 
@@ -192,7 +241,7 @@ class AdjudicationEngine:
                 else:
                     self.backend_error = "CPU weights requested but HuggingFace model did not load."
             except Exception as e:
-                print(f"[Engine] CPU weight load skipped ({e}).")
+                logger.warning("CPU weight load skipped: %s", e)
                 self.backend_error = str(e)
 
         if not self.is_vllm_available and self.cpu_engine is None and _want_llamacpp():
@@ -201,9 +250,9 @@ class AdjudicationEngine:
 
                 self.llama_engine = LlamaCppEngine()
                 self.model_name = self.llama_engine.model_name
-                print(f"[Engine] Llama.cpp ready: {self.model_name}")
+                logger.info("llama.cpp ready: %s", self.model_name)
             except Exception as e:
-                print(f"[Engine] Llama.cpp init failed ({e}).")
+                logger.error("llama.cpp init failed: %s", e)
                 self.backend_error = str(e)
 
         if (
@@ -218,9 +267,9 @@ class AdjudicationEngine:
 
                 self.hybrid_engine = HybridAdjudicationEngine()
                 self.model_name = f"hybrid:{self.hybrid_engine.model_name}"
-                print(f"[Engine] Hybrid Engine ready: {self.model_name}")
+                logger.info("Hybrid engine ready: %s", self.model_name)
             except Exception as e:
-                print(f"[Engine] Hybrid Engine init failed ({e}).")
+                logger.error("Hybrid engine init failed: %s", e)
                 self.backend_error = str(e)
 
         if (
@@ -234,9 +283,9 @@ class AdjudicationEngine:
 
                 self.vertex_engine = VertexGeminiEngine()
                 self.model_name = self.vertex_engine.model_name
-                print(f"[Engine] Vertex Gemini ready: {self.model_name}")
+                logger.info("Vertex Gemini ready: %s", self.model_name)
             except Exception as e:
-                print(f"[Engine] Vertex Gemini init failed ({e}).")
+                logger.error("Vertex Gemini init failed: %s", e)
                 self.backend_error = str(e)
 
     def adjudicate_single(
@@ -272,10 +321,11 @@ class AdjudicationEngine:
                 return self.llama_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.vertex_engine is not None:
             return self.vertex_engine.adjudicate_batch(records, target_condition, clinical_criteria)
-        if (_want_llamacpp() or _want_vertex()) and not _allow_mock():
+        if self.wants_real_backend():
+            # Never hand out keyword-rule labels when the operator asked for an LLM.
             raise RuntimeError(
                 self.backend_error
-                or "No real LLM backend is available (Llama weights did not load)."
+                or f"Requested LLM backend '{_backend_name()}' is not available."
             )
         return self._mock_adjudicate(records, target_condition)
 

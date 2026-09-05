@@ -1,7 +1,6 @@
 import os
 import json
 import argparse
-import datetime
 import pandas as pd
 from typing import List, Dict, Any
 
@@ -34,57 +33,6 @@ def run_vllm_batch_adjudication(
     )
     print(f"Initializing engine with model: {engine.model_name} (TP={tensor_parallel_size}, max_len={max_model_len})")
     return engine.adjudicate_batch(records, target_condition, clinical_criteria)
-
-def run_mock_adjudication(records: List[Dict[str, Any]], target_condition: str) -> List[Dict[str, Any]]:
-    """Mock rule-based demonstrator for CPU/local environments without GPUs."""
-    results = []
-    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    for rec in records:
-        text = rec['notes_formatted_text'].lower()
-        if "septic shock" in text or "sepsis" in text or "icu transfer" in text or "lactate" in text:
-            status = "CONFIRMED_POSITIVE"
-            present = True
-            conf = 0.95
-            criteria = ["SIRS/qSOFA criteria met", "Documented infection source", "Lactate > 2.0 mmol/L"]
-            evidence = [{
-                "note_id": 101,
-                "note_date": rec['visit_start_date'],
-                "evidence_quote": "Patient admitted with fever, tachycardia, hypotension refractory to initial fluids, elevated lactate 3.4.",
-                "interpretation": "Meets consensus definition for Sepsis-3"
-            }]
-            rationale = f"Encounter notes document acute organ dysfunction in setting of confirmed bacterial infection meeting Sepsis criteria."
-        elif "stroke" in text or "nihss" in text or "infarct" in text:
-            status = "CONFIRMED_POSITIVE"
-            present = True
-            conf = 0.92
-            criteria = ["Acute focal neurologic deficit", "MRI/CT confirmed infarct", "Elevated NIHSS"]
-            evidence = [{
-                "note_id": 104,
-                "note_date": rec['visit_start_date'],
-                "evidence_quote": "CT Head demonstrated acute ischemic stroke in left MCA territory.",
-                "interpretation": "Radiological and clinical confirmation of acute ischemic stroke"
-            }]
-            rationale = "Clinical and neuroimaging findings confirm acute ischemic stroke."
-        else:
-            status = "CONFIRMED_NEGATIVE"
-            present = False
-            conf = 0.98
-            criteria = []
-            evidence = []
-            rationale = f"Thorough chart review reveals no clinical documentation, lab findings, or treatment indicating {target_condition}."
-
-        results.append({
-            'person_id': rec['person_id'],
-            'visit_occurrence_id': rec['visit_occurrence_id'],
-            'condition_present': present,
-            'phenotype_status': status,
-            'confidence_score': conf,
-            'primary_criteria_met': criteria,
-            'key_evidence': evidence,
-            'clinical_rationale': rationale,
-            'adjudication_timestamp': timestamp
-        })
-    return results
 
 def main():
     parser = argparse.ArgumentParser(description="Rose Gold Clinical Note Batch Adjudication Pipeline")

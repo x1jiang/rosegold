@@ -18,8 +18,14 @@
 #                     granted when the backend actually needs it.
 #   ALLOW_DIRTY=1     deploy with uncommitted changes (image tag gets -dirty).
 #   DEPLOY_YES=1      skip the confirmation prompt.
-#   ROSEGOLD_API_KEY  optional shared secret for the loopback API (passed through).
+#   ROSEGOLD_API_KEY  optional shared secret for the loopback API (passed through
+#                     as a plain env var; visible to anyone with run.viewer).
+#   ROSEGOLD_API_KEY_SECRET  preferred: name of a Secret Manager secret holding the
+#                     API key. Mounted with --set-secrets; the runtime SA is granted
+#                     secretAccessor on that one secret. Overrides ROSEGOLD_API_KEY.
 #   ROSEGOLD_LLAMA_SHA256  optional pin for the downloaded GGUF (passed through).
+#   ROSEGOLD_MUSE_URL      required when LLM_BACKEND=hybrid (https:// endpoint).
+#   ROSEGOLD_RATE_LIMIT_PER_MIN  optional per-client limit on /api/* (default off).
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -70,6 +76,17 @@ if [[ "${REQUIRE_AUTH:-}" == "1" ]]; then
   AUTH_FLAG="--no-allow-unauthenticated"
 else
   AUTH_FLAG="--allow-unauthenticated"
+fi
+
+if [[ "$LLM_BACKEND" == "hybrid" || "$LLM_BACKEND" == "rosegold_hybrid" || "$LLM_BACKEND" == "muse_hybrid" ]]; then
+  if [[ -z "${ROSEGOLD_MUSE_URL:-}" ]]; then
+    echo "❌ LLM_BACKEND=${LLM_BACKEND} needs ROSEGOLD_MUSE_URL (the hybrid engine has no default endpoint)."
+    exit 1
+  fi
+  case "$ROSEGOLD_MUSE_URL" in
+    https://*) ;;
+    *) echo "❌ ROSEGOLD_MUSE_URL must be https:// for a Cloud Run deployment (clinical text leaves the instance)."; exit 1 ;;
+  esac
 fi
 
 echo "🚀 Deploying Rose Gold to Google Cloud Run"
@@ -126,6 +143,9 @@ APIS=(cloudbuild.googleapis.com run.googleapis.com containerregistry.googleapis.
 if [[ "$LLM_BACKEND" == "vertex" || "$LLM_BACKEND" == "gemini" ]]; then
   APIS+=(aiplatform.googleapis.com)
 fi
+if [[ -n "${ROSEGOLD_API_KEY_SECRET:-}" ]]; then
+  APIS+=(secretmanager.googleapis.com)
+fi
 for svc in "${APIS[@]}"; do
   gcloud services enable "$svc" --project="$PROJECT_ID" --quiet 2>/dev/null \
     || echo "⚠️  Could not enable ${svc} (may already be enabled)"
@@ -175,6 +195,25 @@ if [[ "$LLM_BACKEND" == "vertex" || "$LLM_BACKEND" == "gemini" ]]; then
     --quiet >/dev/null \
     || echo "⚠️  Could not grant Vertex AI IAM (may already be set)"
 fi
+SECRET_FLAGS=()
+if [[ -n "${ROSEGOLD_API_KEY_SECRET:-}" ]]; then
+  echo "🔑 Wiring API key from Secret Manager secret ${ROSEGOLD_API_KEY_SECRET}..."
+  if ! gcloud secrets describe "$ROSEGOLD_API_KEY_SECRET" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo "❌ Secret ${ROSEGOLD_API_KEY_SECRET} not found. Create it first:"
+    echo "     printf '%s' \"\$(openssl rand -hex 32)\" | gcloud secrets create ${ROSEGOLD_API_KEY_SECRET} --data-file=- --project=${PROJECT_ID}"
+    exit 1
+  fi
+  gcloud secrets add-iam-policy-binding "$ROSEGOLD_API_KEY_SECRET" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --quiet >/dev/null \
+    || echo "⚠️  Could not grant secretAccessor (may already be set)"
+  SECRET_FLAGS=(--set-secrets "ROSEGOLD_API_KEY=${ROSEGOLD_API_KEY_SECRET}:latest")
+elif [[ -n "${ROSEGOLD_API_KEY:-}" ]]; then
+  echo "⚠️  ROSEGOLD_API_KEY will be stored as a plain env var on the revision."
+  echo "   Prefer ROSEGOLD_API_KEY_SECRET=<secret-name> to mount it from Secret Manager."
+fi
 echo "✓ Bucket ready: gs://${GCS_BUCKET} (runtime SA ${RUNTIME_SA})"
 echo ""
 
@@ -197,12 +236,21 @@ ENV_VARS+=",ROSEGOLD_MODEL_DIR=/mnt/gcs/models"
 ENV_VARS+=",ROSEGOLD_LOCAL_MODEL_DIR=/tmp/rosegold-models"
 ENV_VARS+=",GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
 ENV_VARS+=",ROSEGOLD_GIT_SHA=${GIT_SHA:-unknown}"
-if [[ -n "${ROSEGOLD_API_KEY:-}" ]]; then
+if [[ -z "${ROSEGOLD_API_KEY_SECRET:-}" && -n "${ROSEGOLD_API_KEY:-}" ]]; then
   ENV_VARS+=",ROSEGOLD_API_KEY=${ROSEGOLD_API_KEY}"
 fi
 if [[ -n "${ROSEGOLD_LLAMA_SHA256:-}" ]]; then
   ENV_VARS+=",ROSEGOLD_LLAMA_SHA256=${ROSEGOLD_LLAMA_SHA256}"
 fi
+if [[ -n "${ROSEGOLD_MUSE_URL:-}" ]]; then
+  ENV_VARS+=",ROSEGOLD_MUSE_URL=${ROSEGOLD_MUSE_URL}"
+fi
+if [[ -n "${ROSEGOLD_RATE_LIMIT_PER_MIN:-}" ]]; then
+  ENV_VARS+=",ROSEGOLD_RATE_LIMIT_PER_MIN=${ROSEGOLD_RATE_LIMIT_PER_MIN}"
+fi
+# Cloud Run's front end sets X-Forwarded-For from the real client; safe to trust there.
+ENV_VARS+=",ROSEGOLD_TRUST_PROXY=1"
+ENV_VARS+=",ROSEGOLD_LOG_JSON=1"
 
 echo ""
 echo "☁️  Deploying Cloud Run service..."
@@ -225,7 +273,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --ingress all \
   --add-volume="name=rosegold-data,type=cloud-storage,bucket=${GCS_BUCKET},mount-options=uid=${CONTAINER_UID};gid=${CONTAINER_UID}" \
   --add-volume-mount="volume=rosegold-data,mount-path=/mnt/gcs" \
-  --set-env-vars "$ENV_VARS"
+  --set-env-vars "$ENV_VARS" \
+  ${SECRET_FLAGS[@]+"${SECRET_FLAGS[@]}"}
 
 if [[ -n "$ACCOUNT" && "$ACCOUNT" != "(unset)" ]]; then
   echo ""
