@@ -1,7 +1,7 @@
 """Native AWS Bedrock Converse adjudication.
 
-Use this when the site-approved path is IAM + Bedrock Runtime (typical 
-Health / AWS Bedrock setup) rather than an OpenAI-compatible URL.
+Use this when the site-approved path is IAM + Bedrock Runtime rather than
+an OpenAI-compatible URL.
 
 If ``ROSEGOLD_OPENAI_BASE_URL`` is set with ``ROSEGOLD_LLM_BACKEND=bedrock``,
 the OpenAI-compatible engine is used instead — see ``app.engine``.

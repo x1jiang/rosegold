@@ -29,7 +29,7 @@ Rose Gold is the **chart-review layer**, not a model a site must install. It sup
   - [C. Google Cloud Run (Serverless CPU + GCS Storage)](#c-google-cloud-run-serverless-cpu--gcs-storage)
   - [D. Air-Gapped Hospital On-Premises (100% Offline & HIPAA Compliant)](#d-air-gapped-hospital-on-premises-100-offline--hipaa-compliant)
   - [E. Singularity & Apptainer (HPC / Academic Medical Centers)](#e-singularity--apptainer-hpc--academic-medical-centers)
-  - [F. Native Python, No Container (BYO-LLM)](#f-native-python-no-container-ucla--amc-byo-llm)
+  - [F. Native Python, No Container (Hospital BYO-LLM)](#f-native-python-no-container-hospital-byo-llm)
 - [Security & Hardening](#security--hardening)
 - [Phenotypes & Custom Criteria](#phenotypes--custom-criteria)
 - [MIMIC-III-Ext-Notes Benchmark](#mimic-iii-ext-notes-benchmark)
@@ -346,7 +346,7 @@ Rose Gold expects standardized Observational Medical Outcomes Partnership (OMOP)
 
 ### Local Installation (Python 3.11+)
 
-This is the default path for sites that cannot run Docker (). No container runtime is required.
+This is the default path for sites that cannot run Docker. No container runtime is required.
 
 ```bash
 # 1. Clone the repository
@@ -357,7 +357,7 @@ cd rosegold
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Optional: point at site-approved Bedrock Mantle (see configs/site.env.example)
+# 3. Optional: point at a site-approved Bedrock Mantle model (see configs/site.env.example)
 export ROSEGOLD_LLM_BACKEND=mantle
 export AWS_REGION=us-west-2
 export AWS_BEARER_TOKEN_BEDROCK=...
@@ -744,11 +744,11 @@ Access the dashboard at `http://localhost:8501` (or via SSH port forwarding: `ss
 
 ---
 
-### F. Native Python, No Container (BYO-LLM)
+### F. Native Python, No Container (Hospital BYO-LLM)
 
-Academic medical centers that **do not permit Docker** do not need Singularity either. Singularity is only an optional HPC packaging path.
+Sites that **do not permit Docker** do not need Singularity either. Singularity is only an optional HPC packaging path.
 
-1. Python 3.11+ venv on a site-approved host that can reach Databricks or Bedrock.
+1. Python 3.11+ venv on a host that can reach the site-approved Bedrock or Databricks endpoint.
 2. `pip install -r requirements.txt` (add `requirements-bedrock.txt` only if IT requires native Bedrock Converse).
 3. Point Rose Gold at Bedrock Mantle — see [Hospital-Approved Hosted LLMs](#5-hospital-approved-hosted-llms-bedrock-mantle--databricks) and [`configs/site.env.example`](configs/site.env.example).
 4. Run the CLI or `./start_services.sh`. No container runtime, no local GPU weights, no outbound call except to Mantle.
@@ -897,7 +897,7 @@ chmod 777 outputs  # Allow container to write outputs safely
 **Solution**: Set `export ROSEGOLD_LLM_BACKEND=llamacpp` for 4-bit CPU inference, or `export ROSEGOLD_LLM_BACKEND=keyword_rules` for instant zero-dependency rule testing.
 
 ### 5. Do we have to install Rose Gold (or Docker / Singularity) to use our own LLM?
-**No.** Rose Gold is the adjudication package (OMOP ingest, phenotypes, evidence quotes, audit, OMOP export). Set `ROSEGOLD_LLM_BACKEND=mantle` and it calls site-approved Bedrock Mantle. Docker and Singularity are optional packaging paths only. See [Native Python, No Container](#f-native-python-no-container-ucla--amc-byo-llm).
+**No.** Rose Gold is the adjudication package (OMOP ingest, phenotypes, evidence quotes, audit, OMOP export). Set `ROSEGOLD_LLM_BACKEND=mantle` and it calls the site-approved Bedrock Mantle model. Docker and Singularity are optional packaging paths only. See [Native Python, No Container](#f-native-python-no-container-hospital-byo-llm).
 
 ---
 
