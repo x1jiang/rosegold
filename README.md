@@ -2,7 +2,7 @@
 
 Turnkey OMOP `NOTE` + `VISIT_OCCURRENCE` clinical phenotyping and chart adjudication for hospital networks and multi-center research consortia. Outputs structured Rose Gold labels with verbatim evidence quotes, clinical rationales, and calibrated confidence scores. 
 
-Rose Gold supports **5 distinct model execution backends**—ranging from high-throughput multi-GPU vLLM clusters and two-tier hybrid reasoning to zero-GPU CPU execution with 4-bit quantized GGUF weights or cloud-native Vertex AI.
+Rose Gold is the **chart-review layer**, not a model a site must install. It supports **7 execution backends**—including hospital-approved hosted LLMs (Databricks Model Serving, AWS Bedrock) over native Python with **no Docker or Singularity required**—plus on-prem vLLM, two-tier hybrid reasoning, llama.cpp GGUF, Vertex AI, and deterministic rules.
 
 ---
 
@@ -15,7 +15,8 @@ Rose Gold supports **5 distinct model execution backends**—ranging from high-t
   - [2. vLLM Engine (High-Throughput GPU / Multi-GPU)](#2-vllm-engine-high-throughput-gpu--multi-gpu)
   - [3. llama.cpp CPU Engine (Quantized GGUF, Zero GPU)](#3-llamacpp-cpu-engine-quantized-gguf-zero-gpu)
   - [4. Vertex AI / Gemini Engine (Cloud-Managed)](#4-vertex-ai--gemini-engine-cloud-managed)
-  - [5. Deterministic Clinical Rules / Mock Engine (CI/CD & Fast Tests)](#5-deterministic-clinical-rules--mock-engine-cicd--fast-tests)
+  - [5. Hospital-Approved Hosted LLMs (Bedrock Mantle / Databricks)](#5-hospital-approved-hosted-llms-bedrock-mantle--databricks)
+  - [6. Deterministic Clinical Rules / Mock Engine (CI/CD & Fast Tests)](#6-deterministic-clinical-rules--mock-engine-cicd--fast-tests)
 - [Environment Variables Reference](#environment-variables-reference)
 - [OMOP CDM Data Contract & Ingestion](#omop-cdm-data-contract--ingestion)
 - [Quick Start Guide](#quick-start-guide)
@@ -28,6 +29,7 @@ Rose Gold supports **5 distinct model execution backends**—ranging from high-t
   - [C. Google Cloud Run (Serverless CPU + GCS Storage)](#c-google-cloud-run-serverless-cpu--gcs-storage)
   - [D. Air-Gapped Hospital On-Premises (100% Offline & HIPAA Compliant)](#d-air-gapped-hospital-on-premises-100-offline--hipaa-compliant)
   - [E. Singularity & Apptainer (HPC / Academic Medical Centers)](#e-singularity--apptainer-hpc--academic-medical-centers)
+  - [F. Native Python, No Container (BYO-LLM)](#f-native-python-no-container-ucla--amc-byo-llm)
 - [Security & Hardening](#security--hardening)
 - [Phenotypes & Custom Criteria](#phenotypes--custom-criteria)
 - [MIMIC-III-Ext-Notes Benchmark](#mimic-iii-ext-notes-benchmark)
@@ -51,7 +53,7 @@ flowchart TD
     subgraph TieredCascade["2. Three-Tier Adjudication Cascade"]
         Prepped --> T1["Tier 1: Deterministic NLP Pre-Filter\n(Clause Segmentation & Negation Screening ±70 chars)"]
         T1 -- "No positive triggers (<0.01s)" --> RuleOut["Instant Fast Rule-Out\nCONFIRMED_NEGATIVE"]
-        T1 -- "Candidate triggers present" --> T2["Tier 2: Deep Clinical LLM Reasoning\n• vLLM (Llama-3.1-8B, Gemma-2-9b)\n• Two-Tier Hybrid (Muse-Glimmer-30B)\n• llama.cpp (Llama-3.2-3B GGUF on CPU)\n• Vertex AI (Gemini 1.5/2.x)"]
+        T1 -- "Candidate triggers present" --> T2["Tier 2: Deep Clinical LLM Reasoning\n• Site-approved Bedrock Mantle (OpenAI-compatible)\n• vLLM (Llama-3.1-8B, Gemma-2-9b)\n• Two-Tier Hybrid (Muse-Glimmer-30B)\n• llama.cpp (Llama-3.2-3B GGUF on CPU)\n• Vertex AI (Gemini 1.5/2.x)"]
         T2 --> T3["Tier 3: Consensus Arbitration & Provenance\n• Strict Pydantic JSON Schema Guided Decoding\n• Verbatim Quote Extraction with Note ID & Date\n• Calibrated Confidence Probability (0.0 - 1.0)"]
     end
 
@@ -92,6 +94,8 @@ Rose Gold provides a unified `AdjudicationEngine` that automatically detects ava
 | `vllm` | vLLM Engine | NVIDIA GPU (16GB - 80GB VRAM) | Maximum throughput, prefix caching, guided decoding |
 | `llamacpp` / `gguf` | llama.cpp Python | Commodity CPU (4+ cores, 8GB RAM) | Zero-GPU local run, auto-downloads 4-bit GGUF |
 | `vertex` / `gemini` | Google Vertex AI | Cloud VM / Serverless | Managed cloud API, zero weight storage on node |
+| `mantle` / `bedrock` | Amazon Bedrock Mantle (OpenAI Chat Completions) | Bedrock API key + region | **Recommended AMC path.** No local model, no Docker, no boto3. |
+| `databricks` / `openai` | Site-approved hosted LLM | Databricks / any OpenAI-compatible gateway | Alternate if Mantle is not the approved path. |
 | `keyword_rules` / `mock` | Rule-based Engine | Any CPU (< 1GB RAM) | Zero dependencies, instant offline testing & CI/CD |
 
 ---
@@ -195,7 +199,54 @@ python -m app.adjudicator \
 
 ---
 
-### 5. Deterministic Clinical Rules / Mock Engine (CI/CD & Fast Tests)
+### 5. Hospital-Approved Hosted LLMs (Bedrock Mantle / Databricks)
+
+Sites that already have an IRB- and IT-approved LLM do **not** install a Rose Gold model, Docker, or Singularity. Rose Gold is a Python package that calls **your** endpoint. Clinical notes leave the process only toward that URL.
+
+**Recommended:** [Amazon Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html) — OpenAI Chat Completions, a Bedrock API key, and the site-approved model id. No boto3 Converse, no container runtime. Mantle uses the same Bedrock inference engine with zero operator access (ZOA).
+
+Copy [`configs/site.env.example`](configs/site.env.example), fill in site values, and confirm configuration (secrets are redacted):
+
+```bash
+set -a && source /path/to/your-site.env && set +a
+python -m app.hosted_llm
+```
+
+#### Amazon Bedrock Mantle (recommended)
+
+```bash
+export ROSEGOLD_LLM_BACKEND="mantle"
+export AWS_REGION="us-west-2"
+export AWS_BEARER_TOKEN_BEDROCK="..."          # Bedrock API key, not an OpenAI key
+export ROSEGOLD_OPENAI_MODEL="YOUR-APPROVED-MANTLE-MODEL"
+
+python -m app.adjudicator \
+  --notes_path data/synthetic_notes.csv \
+  --visits_path data/synthetic_visits.csv \
+  --target_condition "Sepsis / Septic Shock" \
+  --backend mantle
+```
+
+The base URL is derived as `https://bedrock-mantle.${AWS_REGION}.api.aws/v1`. Override with `ROSEGOLD_OPENAI_BASE_URL` or `ROSEGOLD_MANTLE_PATH=openai/v1` if the approved model is served on that path. `ROSEGOLD_LLM_BACKEND=bedrock` uses Mantle by default; set `ROSEGOLD_BEDROCK_API=converse` only if IT requires native boto3.
+
+#### Databricks Model Serving (alternate)
+
+```bash
+export ROSEGOLD_LLM_BACKEND="databricks"
+export DATABRICKS_HOST="https://YOUR-WORKSPACE.azuredatabricks.net"
+export DATABRICKS_TOKEN="dapi..."
+export ROSEGOLD_OPENAI_MODEL="YOUR-APPROVED-SERVING-ENDPOINT"
+
+python -m app.adjudicator --backend databricks \
+  --notes_path data/synthetic_notes.csv \
+  --visits_path data/synthetic_visits.csv
+```
+
+An explicit `mantle` / `bedrock` / `databricks` / `openai` / `vertex` / `hybrid` selection **never** loads local vLLM or GGUF weights, even on a GPU workstation.
+
+---
+
+### 6. Deterministic Clinical Rules / Mock Engine (CI/CD & Fast Tests)
 
 Instantly test pipelines, UI integration, and OMOP ETL workflows without requiring GPUs, model weights, or network access:
 
@@ -214,7 +265,18 @@ python -m app.adjudicator \
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `ROSEGOLD_LLM_BACKEND` | `str` | `auto` | Backend selector: `vllm`, `hybrid`, `llamacpp`, `vertex`, or `keyword_rules`. |
+| `ROSEGOLD_LLM_BACKEND` | `str` | `auto` | Backend selector: `mantle`, `bedrock`, `databricks`, `vllm`, `hybrid`, `llamacpp`, `vertex`, `openai`, or `keyword_rules`. |
+| `AWS_BEARER_TOKEN_BEDROCK` / `ROSEGOLD_OPENAI_API_KEY` | `str` | **required for `mantle`** | Amazon Bedrock API key (not an OpenAI key). Never commit. |
+| `AWS_REGION` / `ROSEGOLD_BEDROCK_REGION` | `str` | `us-west-2` | Region for `https://bedrock-mantle.{region}.api.aws/v1`. |
+| `ROSEGOLD_MANTLE_PATH` | `str` | `v1` | Mantle URL suffix: `v1` (Chat Completions default) or `openai/v1`. |
+| `ROSEGOLD_OPENAI_BASE_URL` | `str` | derived for Mantle | Override the OpenAI-compatible base URL. Must be `https://`. |
+| `ROSEGOLD_OPENAI_MODEL` | `str` | **required for hosted** | Mantle model id or Databricks serving-endpoint name. |
+| `DATABRICKS_HOST` | `str` | **required for `databricks` if no base URL** | Workspace URL; Rose Gold appends `/serving-endpoints`. |
+| `DATABRICKS_TOKEN` | `str` | **required for `databricks`** | Databricks PAT or service-principal token. |
+| `ROSEGOLD_OPENAI_TIMEOUT` | `float` | `45` | Per-visit timeout (seconds) for hosted chat completions. |
+| `ROSEGOLD_OPENAI_ALLOW_HTTP` | `bool` | `0` | Permit a plain-`http://` hosted endpoint on a trusted private network. |
+| `ROSEGOLD_BEDROCK_API` | `str` | unset | Set `converse` to use native boto3 instead of Mantle. |
+| `ROSEGOLD_BEDROCK_MODEL` | `str` | **required for Converse** | Bedrock model id when `ROSEGOLD_BEDROCK_API=converse`. |
 | `ROSEGOLD_MODEL_NAME` | `str` | `auto` | Hugging Face model ID or path. Set to `auto` for hardware-driven selection. |
 | `ROSEGOLD_MUSE_URL` | `str` | **required for `hybrid`** | Completions endpoint for Muse-Glimmer-30B. Must be `https://`; `http://` only for loopback or with `ROSEGOLD_MUSE_ALLOW_HTTP=1`. No default — the hybrid backend refuses to start without it. |
 | `ROSEGOLD_MUSE_MODEL` | `str` | `Muse-Glimmer-30B` | Model name passed to the Muse completion endpoint. |
@@ -284,15 +346,24 @@ Rose Gold expects standardized Observational Medical Outcomes Partnership (OMOP)
 
 ### Local Installation (Python 3.11+)
 
+This is the default path for sites that cannot run Docker (). No container runtime is required.
+
 ```bash
 # 1. Clone the repository
 git clone https://github.com/your-org/rosegold.git
 cd rosegold
 
 # 2. Install dependencies
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Launch full stack (FastAPI on :8000, Streamlit on :8501)
+# 3. Optional: point at site-approved Bedrock Mantle (see configs/site.env.example)
+export ROSEGOLD_LLM_BACKEND=mantle
+export AWS_REGION=us-west-2
+export AWS_BEARER_TOKEN_BEDROCK=...
+export ROSEGOLD_OPENAI_MODEL=YOUR-APPROVED-MANTLE-MODEL
+
+# 4. Launch full stack (FastAPI on :8000, Streamlit on :8501)
 ./start_services.sh
 ```
 
@@ -673,6 +744,19 @@ Access the dashboard at `http://localhost:8501` (or via SSH port forwarding: `ss
 
 ---
 
+### F. Native Python, No Container (BYO-LLM)
+
+Academic medical centers that **do not permit Docker** do not need Singularity either. Singularity is only an optional HPC packaging path.
+
+1. Python 3.11+ venv on a site-approved host that can reach Databricks or Bedrock.
+2. `pip install -r requirements.txt` (add `requirements-bedrock.txt` only if IT requires native Bedrock Converse).
+3. Point Rose Gold at Bedrock Mantle — see [Hospital-Approved Hosted LLMs](#5-hospital-approved-hosted-llms-bedrock-mantle--databricks) and [`configs/site.env.example`](configs/site.env.example).
+4. Run the CLI or `./start_services.sh`. No container runtime, no local GPU weights, no outbound call except to Mantle.
+
+PHI stays inside the approved Bedrock account. Rose Gold does not substitute a different model.
+
+---
+
 ## Security & Hardening
 
 Rose Gold handles clinical narrative, so the service is built to fail closed. What is in place:
@@ -688,9 +772,10 @@ Rose Gold handles clinical narrative, so the service is built to fail closed. Wh
 - Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, and — on JSON routes — `Cache-Control: no-store` plus `Content-Security-Policy: default-src 'none'`.
 - `/ready` is a real readiness probe: `503` while a required LLM backend is loading or failed, `200` only when adjudication calls would succeed.
 
-**Inference engine (`app/engine.py`, `app/hybrid_engine.py`, `app/vertex_engine.py`, `app/prompts.py`)**
+**Inference engine (`app/engine.py`, `app/hybrid_engine.py`, `app/vertex_engine.py`, `app/openai_compat_engine.py`, `app/bedrock_engine.py`, `app/prompts.py`)**
 - Backend initialization is guarded by a lock so concurrent first requests wait for a single load; `/health` exposes `backend_initializing`. A failed load is retried after `ROSEGOLD_BACKEND_RETRY_SECONDS` (default 60 s) on the next request, so a transient cold-start failure does not pin the instance in a degraded state until someone restarts it.
-- When `ROSEGOLD_LLM_BACKEND` names a real backend (`llamacpp`, `vertex`, `hybrid`) and it is unavailable, requests fail with `503`. Keyword-rule labels are never substituted for LLM output unless `ROSEGOLD_ALLOW_MOCK=1` is set explicitly. The dashboard follows the same rule: an API error is shown, not papered over with an in-process engine.
+- When `ROSEGOLD_LLM_BACKEND` names a real backend (`llamacpp`, `vertex`, `hybrid`, `mantle`, `bedrock`, `databricks`, `openai`) and it is unavailable, requests fail with `503`. Keyword-rule labels are never substituted for LLM output unless `ROSEGOLD_ALLOW_MOCK=1` is set explicitly. The dashboard follows the same rule: an API error is shown, not papered over with an in-process engine.
+- Hosted backends (`mantle`, `bedrock`, `databricks`, `openai`) have **no default model**. Mantle builds `https://bedrock-mantle.{region}.api.aws/v1` and requires a Bedrock API key. One failed visit is labelled `INDETERMINATE` and does not abort the batch. An explicit hosted/remote backend never loads local vLLM or GGUF weights.
 - The hybrid engine has **no default endpoint**. `ROSEGOLD_MUSE_URL` must be set and must be `https://` (loopback or `ROSEGOLD_MUSE_ALLOW_HTTP=1` excepted). `ROSEGOLD_MUSE_API_KEY` is sent as a bearer token. If the LLM call fails, the record is tagged `inference_backend: hybrid:rules_only(<reason>)` with reduced confidence and a rationale note instead of claiming a verification that never ran.
 - Vertex failures are isolated per visit (an `INDETERMINATE` record with the error class) instead of aborting the batch.
 - llama.cpp / vLLM / HF generation is serialized behind an inference lock (those handles are not safe for concurrent `generate()` calls from uvicorn's threadpool).
@@ -810,6 +895,9 @@ chmod 777 outputs  # Allow container to write outputs safely
 
 ### 4. Running Without Any GPU or Remote Endpoint
 **Solution**: Set `export ROSEGOLD_LLM_BACKEND=llamacpp` for 4-bit CPU inference, or `export ROSEGOLD_LLM_BACKEND=keyword_rules` for instant zero-dependency rule testing.
+
+### 5. Do we have to install Rose Gold (or Docker / Singularity) to use our own LLM?
+**No.** Rose Gold is the adjudication package (OMOP ingest, phenotypes, evidence quotes, audit, OMOP export). Set `ROSEGOLD_LLM_BACKEND=mantle` and it calls site-approved Bedrock Mantle. Docker and Singularity are optional packaging paths only. See [Native Python, No Container](#f-native-python-no-container-ucla--amc-byo-llm).
 
 ---
 

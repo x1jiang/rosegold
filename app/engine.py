@@ -51,9 +51,54 @@ def _want_hybrid() -> bool:
     return _backend_name() in {"hybrid", "rosegold_hybrid", "muse_hybrid"}
 
 
+def _want_hosted() -> bool:
+    return _backend_name() in {
+        "openai",
+        "openai_compat",
+        "hosted",
+        "databricks",
+        "mantle",
+        "bedrock_mantle",
+    }
+
+
+def _want_bedrock() -> bool:
+    return _backend_name() in {"bedrock", "aws_bedrock", "bedrock_converse"}
+
+
+def _want_bedrock_converse() -> bool:
+    if _backend_name() == "bedrock_converse":
+        return True
+    return os.getenv("ROSEGOLD_BEDROCK_API", "").lower().strip() in {"converse", "invoke", "native"}
+
+
+def _explicit_remote_backend() -> bool:
+    """Operator asked for a site-hosted LLM; do not load local vLLM/GGUF."""
+    return _want_hosted() or _want_bedrock() or _want_vertex() or _want_hybrid()
+
+
 def _want_llamacpp() -> bool:
     backend = _backend_name()
-    if backend in {"mock", "keyword", "rules", "vertex", "gemini", "hybrid", "rosegold_hybrid", "muse_hybrid"}:
+    if backend in {
+        "mock",
+        "keyword",
+        "rules",
+        "keyword_rules",
+        "vertex",
+        "gemini",
+        "hybrid",
+        "rosegold_hybrid",
+        "muse_hybrid",
+        "openai",
+        "openai_compat",
+        "hosted",
+        "databricks",
+        "mantle",
+        "bedrock_mantle",
+        "bedrock",
+        "aws_bedrock",
+        "bedrock_converse",
+    }:
         return False
     if backend in {"llama", "llamacpp", "llama.cpp", "gguf"}:
         return True
@@ -90,6 +135,8 @@ class AdjudicationEngine:
         self.vertex_engine = None
         self.llama_engine = None
         self.hybrid_engine = None
+        self.hosted_engine = None
+        self.bedrock_engine = None
         self.is_vllm_available = False
         self._backend_initialized = False
         self._backend_ready = False
@@ -107,7 +154,9 @@ class AdjudicationEngine:
 
     def wants_real_backend(self) -> bool:
         """True when configuration demands a real LLM and forbids the rules fallback."""
-        return (_want_llamacpp() or _want_vertex() or _want_hybrid()) and not _allow_mock()
+        return (
+            _want_llamacpp() or _want_vertex() or _want_hybrid() or _want_hosted() or _want_bedrock()
+        ) and not _allow_mock()
 
     def has_real_backend(self) -> bool:
         return bool(
@@ -116,6 +165,8 @@ class AdjudicationEngine:
             or self.llama_engine is not None
             or self.hybrid_engine is not None
             or self.vertex_engine is not None
+            or self.hosted_engine is not None
+            or self.bedrock_engine is not None
         )
 
     def backend_status(self, init: bool = False) -> Dict[str, Any]:
@@ -143,6 +194,18 @@ class AdjudicationEngine:
                 "model_name": self.vertex_engine.model_name,
                 "llm_real": True,
             }
+        if self.hosted_engine is not None:
+            return {
+                "backend": getattr(self.hosted_engine, "backend_tag", "openai"),
+                "model_name": self.hosted_engine.model_name,
+                "llm_real": True,
+            }
+        if self.bedrock_engine is not None:
+            return {
+                "backend": "bedrock",
+                "model_name": self.bedrock_engine.model_name,
+                "llm_real": True,
+            }
         if self.wants_real_backend() and not self._backend_ready:
             return {
                 "backend": "loading",
@@ -164,7 +227,7 @@ class AdjudicationEngine:
         )
 
     def _init_backend(self):
-        """Load vLLM, HF CPU weights, llama.cpp, hybrid, or Vertex Gemini on first use.
+        """Load the configured LLM backend on first use.
 
         Guarded by a lock so concurrent first requests wait for one load instead
         of racing a half-initialized engine. If a required backend failed to load,
@@ -198,7 +261,7 @@ class AdjudicationEngine:
         settings = pipeline_settings()
         prefix_cache = bool(settings.get("enable_prefix_caching", True))
 
-        if self.is_gpu:
+        if self.is_gpu and not _explicit_remote_backend():
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -228,7 +291,7 @@ class AdjudicationEngine:
                 self.backend_error = str(e)
 
         load_cpu_weights = os.getenv("ROSEGOLD_LOAD_CPU_WEIGHTS", "").lower() in {"1", "true", "yes"}
-        if not self.is_vllm_available and load_cpu_weights:
+        if not _explicit_remote_backend() and not self.is_vllm_available and load_cpu_weights:
             try:
                 from app.cpu_engine import CPULlamaGemmaEngine
 
@@ -244,7 +307,12 @@ class AdjudicationEngine:
                 logger.warning("CPU weight load skipped: %s", e)
                 self.backend_error = str(e)
 
-        if not self.is_vllm_available and self.cpu_engine is None and _want_llamacpp():
+        if (
+            not _explicit_remote_backend()
+            and not self.is_vllm_available
+            and self.cpu_engine is None
+            and _want_llamacpp()
+        ):
             try:
                 from app.llamacpp_engine import LlamaCppEngine
 
@@ -288,6 +356,35 @@ class AdjudicationEngine:
                 logger.error("Vertex Gemini init failed: %s", e)
                 self.backend_error = str(e)
 
+        if _want_hosted() and self.hosted_engine is None:
+            try:
+                from app.openai_compat_engine import OpenAICompatEngine
+
+                self.hosted_engine = OpenAICompatEngine()
+                self.model_name = self.hosted_engine.model_name
+                logger.info("Hosted LLM ready: %s (%s)", self.model_name, self.hosted_engine.backend_tag)
+            except Exception as e:
+                logger.error("Hosted LLM init failed: %s", e)
+                self.backend_error = str(e)
+
+        if _want_bedrock() and self.hosted_engine is None and self.bedrock_engine is None:
+            try:
+                if _want_bedrock_converse():
+                    from app.bedrock_engine import BedrockEngine
+
+                    self.bedrock_engine = BedrockEngine()
+                    self.model_name = self.bedrock_engine.model_name
+                    logger.info("Bedrock Converse ready: %s", self.model_name)
+                else:
+                    from app.openai_compat_engine import OpenAICompatEngine
+
+                    self.hosted_engine = OpenAICompatEngine(backend_tag="mantle")
+                    self.model_name = self.hosted_engine.model_name
+                    logger.info("Bedrock Mantle ready: %s", self.model_name)
+            except Exception as e:
+                logger.error("Bedrock init failed: %s", e)
+                self.backend_error = str(e)
+
     def adjudicate_single(
         self,
         record: Dict[str, Any],
@@ -321,6 +418,10 @@ class AdjudicationEngine:
                 return self.llama_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.vertex_engine is not None:
             return self.vertex_engine.adjudicate_batch(records, target_condition, clinical_criteria)
+        if self.hosted_engine is not None:
+            return self.hosted_engine.adjudicate_batch(records, target_condition, clinical_criteria)
+        if self.bedrock_engine is not None:
+            return self.bedrock_engine.adjudicate_batch(records, target_condition, clinical_criteria)
         if self.wants_real_backend():
             # Never hand out keyword-rule labels when the operator asked for an LLM.
             raise RuntimeError(

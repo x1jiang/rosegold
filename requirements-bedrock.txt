@@ -1,0 +1,4 @@
+# Optional extra for native AWS Bedrock Converse (ROSEGOLD_LLM_BACKEND=bedrock
+# without an OpenAI-compatible URL). Databricks and OpenAI-compatible gateways
+# do not need this file — they use the openai package already in requirements.txt.
+boto3>=1.34.0,<2

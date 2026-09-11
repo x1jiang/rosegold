@@ -61,7 +61,7 @@ class RoseGoldAdjudication(BaseModel):
     adjudication_timestamp: Optional[str] = Field(None, description="ISO timestamp")
     inference_backend: Optional[str] = Field(
         None,
-        description="Actual inference path: vllm, vertex, hf_cpu, or keyword_rules",
+        description="Actual inference path: mantle, bedrock, vllm, vertex, databricks, openai, hf_cpu, or keyword_rules",
     )
 
     @field_validator('condition_present')

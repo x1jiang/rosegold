@@ -45,7 +45,7 @@ def main():
     parser.add_argument("--quantization", type=str, default=None, help="Quantization scheme (e.g. 'fp8', 'awq', 'bitsandbytes')")
     parser.add_argument("--max_model_len", type=int, default=32768, help="Max context window length in tokens")
     parser.add_argument("--clinical_criteria", type=str, default=None, help="Custom clinical criteria text (overrides config.yaml default)")
-    parser.add_argument("--backend", type=str, default=None, help="Explicit backend to use (vllm, hybrid, llamacpp, vertex, keyword_rules)")
+    parser.add_argument("--backend", type=str, default=None, help="Explicit backend to use (mantle, bedrock, databricks, vllm, hybrid, llamacpp, vertex, openai, keyword_rules)")
     parser.add_argument("--chunk_size", type=int, default=None, help="Override batch chunk size")
 
     args = parser.parse_args()
