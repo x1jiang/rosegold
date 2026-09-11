@@ -28,7 +28,7 @@ Rose Gold is the **chart-review layer**, not a model a site must install. It sup
   - [B. Multi-GPU Server (Docker Compose + Tensor Parallelism)](#b-multi-gpu-server-docker-compose--tensor-parallelism)
   - [C. Google Cloud Run (Serverless CPU + GCS Storage)](#c-google-cloud-run-serverless-cpu--gcs-storage)
   - [D. Air-Gapped Hospital On-Premises (100% Offline & HIPAA Compliant)](#d-air-gapped-hospital-on-premises-100-offline--hipaa-compliant)
-  - [E. Singularity & Apptainer (HPC / Academic Medical Centers)](#e-singularity--apptainer-hpc--academic-medical-centers)
+  - [E. Singularity & Apptainer (HPC clusters)](#e-singularity--apptainer-hpc-clusters)
   - [F. Native Python, No Container (Hospital BYO-LLM)](#f-native-python-no-container-hospital-byo-llm)
 - [Security & Hardening](#security--hardening)
 - [Phenotypes & Custom Criteria](#phenotypes--custom-criteria)
@@ -94,7 +94,7 @@ Rose Gold provides a unified `AdjudicationEngine` that automatically detects ava
 | `vllm` | vLLM Engine | NVIDIA GPU (16GB - 80GB VRAM) | Maximum throughput, prefix caching, guided decoding |
 | `llamacpp` / `gguf` | llama.cpp Python | Commodity CPU (4+ cores, 8GB RAM) | Zero-GPU local run, auto-downloads 4-bit GGUF |
 | `vertex` / `gemini` | Google Vertex AI | Cloud VM / Serverless | Managed cloud API, zero weight storage on node |
-| `mantle` / `bedrock` | Amazon Bedrock Mantle (OpenAI Chat Completions) | Bedrock API key + region | **Recommended AMC path.** No local model, no Docker, no boto3. |
+| `mantle` / `bedrock` | Amazon Bedrock Mantle (OpenAI Chat Completions) | Bedrock API key + region | **Recommended no-container path.** No local model, no Docker, no boto3. |
 | `databricks` / `openai` | Site-approved hosted LLM | Databricks / any OpenAI-compatible gateway | Alternate if Mantle is not the approved path. |
 | `keyword_rules` / `mock` | Rule-based Engine | Any CPU (< 1GB RAM) | Zero dependencies, instant offline testing & CI/CD |
 
@@ -606,9 +606,9 @@ For air-gapped hospital environments without outbound internet access:
 
 ---
 
-### E. Singularity & Apptainer (HPC / Academic Medical Centers)
+### E. Singularity & Apptainer (HPC clusters)
 
-[Singularity / Apptainer](https://apptainer.org/) is the standard container runtime across university supercomputing centers, HPC clusters where Docker is prohibited due to root security concerns.
+[Singularity / Apptainer](https://apptainer.org/) is the standard container runtime on HPC clusters where Docker is prohibited due to root security concerns.
 
 Key benefits for clinical AI:
 - **Zero Daemon & Strictly Non-Root**: Inherits your unprivileged host credentials without privilege escalation.
