@@ -25,3 +25,5 @@ scripts/open_outlook_draft*
 .codex/
 .gstack/
 .unlazy/
+requests/
+
