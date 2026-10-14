@@ -70,6 +70,7 @@ class InstructorLlamaAdjudicator:
         # If connected to active vLLM / OpenAI server
         if self.client is not None:
             try:
+                from app.clinical_rules import verify_and_ground_adjudication
                 response: RoseGoldAdjudication = self.client.chat.completions.create(
                     model=self.model_name,
                     response_model=RoseGoldAdjudication,
@@ -84,78 +85,30 @@ class InstructorLlamaAdjudicator:
                 res_dict['person_id'] = record['person_id']
                 res_dict['visit_occurrence_id'] = record['visit_occurrence_id']
                 res_dict['adjudication_timestamp'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                return res_dict
+                return verify_and_ground_adjudication(
+                    res_dict, record, target_condition, clinical_criteria
+                )
             except Exception as e:
                 print(f"[Instructor] Fallback to engine due to connection: {e}")
 
         # Local validation & formatting fallback
-        return self._local_validated_adjudication(record, target_condition)
+        return self._local_validated_adjudication(record, target_condition, clinical_criteria)
 
-    def _local_validated_adjudication(self, record: Dict[str, Any], target_condition: str) -> Dict[str, Any]:
-        text = record.get('notes_formatted_text', '')
-        text_lower = text.lower()
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-        if "septic shock" in text_lower or "lactate 4.2" in text_lower:
-            payload = {
-                "visit_occurrence_id": record['visit_occurrence_id'],
-                "person_id": record['person_id'],
-                "clinical_rationale": "Patient presented with refractory hypotension (MAP 53), acute kidney injury, and lactic acidosis (4.2 mmol/L) secondary to Klebsiella urosepsis requiring central line vasopressors.",
-                "primary_criteria_met": [
-                    "SIRS criteria >= 2 (T 39.1C, HR 128, WBC 23.4)",
-                    "Documented source of infection (ESBL Klebsiella urosepsis)",
-                    "Acute organ dysfunction (Lactate 4.2, Creatinine 2.8)",
-                    "Septic shock requiring Norepinephrine infusion"
-                ],
-                "key_evidence": [
-                    {
-                        "note_id": 30001,
-                        "note_date": record.get('visit_start_date', '2026-03-01'),
-                        "evidence_quote": "Patient admitted with fever, tachycardia, hypotension refractory to initial fluids, elevated lactate 4.2. Initiating Norepinephrine via central line.",
-                        "interpretation": "Meets consensus definition for Sepsis-3 / Septic Shock"
-                    }
-                ],
-                "phenotype_status": "CONFIRMED_POSITIVE",
-                "condition_present": True,
-                "confidence_score": 0.98,
-                "adjudication_timestamp": timestamp
-            }
-        elif "stroke" in text_lower or "mca" in text_lower or "nihss" in text_lower:
-            payload = {
-                "visit_occurrence_id": record['visit_occurrence_id'],
-                "person_id": record['person_id'],
-                "clinical_rationale": "Sudden onset focal neurological deficit with NIHSS 18 and CTA confirmed proximal M1 MCA occlusion treated with systemic thrombolysis and mechanical thrombectomy.",
-                "primary_criteria_met": [
-                    "Acute focal neurological deficit (NIHSS 18)",
-                    "CTA confirmed left M1 MCA large vessel occlusion",
-                    "Thrombectomy with TICI 3 reperfusion"
-                ],
-                "key_evidence": [
-                    {
-                        "note_id": 30006,
-                        "note_date": record.get('visit_start_date', '2026-03-10'),
-                        "evidence_quote": "CT Angiogram Head/Neck: Dense occlusion of the proximal left M1 segment of the Middle Cerebral Artery.",
-                        "interpretation": "Direct angiographic proof of large vessel acute ischemic stroke"
-                    }
-                ],
-                "phenotype_status": "CONFIRMED_POSITIVE",
-                "condition_present": True,
-                "confidence_score": 0.96,
-                "adjudication_timestamp": timestamp
-            }
-        else:
-            payload = {
-                "visit_occurrence_id": record['visit_occurrence_id'],
-                "person_id": record['person_id'],
-                "clinical_rationale": f"Chart review reveals no documentation of clinical criteria, elevated biomarkers, or diagnostic findings for {target_condition}.",
-                "primary_criteria_met": [],
-                "key_evidence": [],
-                "phenotype_status": "CONFIRMED_NEGATIVE",
-                "condition_present": False,
-                "confidence_score": 0.99,
-                "adjudication_timestamp": timestamp
-            }
-
-        # Validate with Pydantic / Instructor schema
+    def _local_validated_adjudication(
+        self,
+        record: Dict[str, Any],
+        target_condition: str,
+        clinical_criteria: str = "",
+    ) -> Dict[str, Any]:
+        from app.clinical_rules import adjudicate_clinical_rules
+        payload = adjudicate_clinical_rules(
+            [record],
+            target_condition,
+            backend_tag="instructor_local",
+            clinical_criteria=clinical_criteria,
+        )[0]
         validated = RoseGoldAdjudication(**payload)
-        return validated.model_dump()
+        res = validated.model_dump()
+        res["inference_backend"] = "instructor_local"
+        return res
+

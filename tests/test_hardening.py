@@ -156,3 +156,136 @@ def test_singularity_definition_files():
             assert "%environment" in content
             assert "%post" in content
             assert "%runscript" in content
+
+
+def test_schema_coercion_and_normalization():
+    from app.schemas import RoseGoldAdjudication, ClinicalEvidence
+
+    ev = ClinicalEvidence(note_id="Note 40012", evidence_quote="Lactate elevated at 4.2 mmol/L")
+    assert ev.note_id == 40012
+
+    ev_none = ClinicalEvidence(note_id="N/A", evidence_quote="Hypotension requiring pressors")
+    assert ev_none.note_id is None
+
+    adj = RoseGoldAdjudication(
+        clinical_rationale="Confirmed sepsis with organ dysfunction.",
+        primary_criteria_met=["Infection", "Lactate > 2"],
+        key_evidence=[
+            {"note_id": "Note #101", "evidence_quote": "Valid verbatim clinical quote here"},
+            {"note_id": 102, "evidence_quote": "no"},  # too short (<5 chars), should be filtered out
+            "Direct string evidence quote from chart",
+        ],
+        phenotype_status="positive",
+        condition_present=True,
+        confidence_score="94%",
+    )
+    assert adj.phenotype_status == "CONFIRMED_POSITIVE"
+    assert adj.confidence_score == 0.94
+    assert len(adj.key_evidence) == 2
+    assert adj.key_evidence[0].note_id == 101
+    assert adj.key_evidence[1].evidence_quote == "Direct string evidence quote from chart"
+
+
+def test_parse_model_json_resilience():
+    from app.vertex_engine import _parse_model_json
+
+    messy_output = """Here is my clinical chart review adjudication:
+```json
+{
+  "reasoning": "Patient has documented Klebsiella bacteremia and septic shock.",
+  "primary_criteria_met": ["Infection", "Vasopressor requirement",],
+  "key_evidence": [
+    {
+      "note_id": "40001",
+      "evidence_quote": "Klebsiella bacteremia and septic shock on norepinephrine",
+    },
+  ],
+  "phenotype_status": "probable",
+  "condition_present": true,
+  "confidence_score": 88,
+}
+```
+Hope this helps!"""
+    parsed = _parse_model_json(messy_output)
+    assert parsed.phenotype_status == "SUSPECTED_PROBABLE"
+    assert parsed.confidence_score == 0.88
+    assert "Klebsiella bacteremia" in parsed.clinical_rationale
+    assert parsed.key_evidence[0].note_id == 40001
+
+
+def test_clinical_rules_empty_notes_and_custom_phenotype():
+    from app.clinical_rules import adjudicate_clinical_rules
+
+    empty_rec = {
+        "person_id": 1,
+        "visit_occurrence_id": 100,
+        "notes_formatted_text": "[No notes found for this visit encounter]",
+    }
+    res_empty = adjudicate_clinical_rules([empty_rec], "Sepsis / Septic Shock")[0]
+    assert res_empty["phenotype_status"] == "INDETERMINATE_INSUFFICIENT_DATA"
+    assert res_empty["condition_present"] is False
+    assert res_empty["confidence_score"] == 0.0
+
+    pe_pos_rec = {
+        "person_id": 2,
+        "visit_occurrence_id": 200,
+        "notes_formatted_text": "[Note 1 | Date: 2026-03-01] CTA chest demonstrates acute segmental pulmonary embolism in the right lower lobe.",
+    }
+    res_pe_pos = adjudicate_clinical_rules(
+        [pe_pos_rec],
+        "Pulmonary Embolism",
+        clinical_criteria="1. CTA chest with filling defect\n2. Acute pulmonary embolism",
+    )[0]
+    assert res_pe_pos["condition_present"] is True
+    assert res_pe_pos["phenotype_status"] in ("CONFIRMED_POSITIVE", "SUSPECTED_PROBABLE")
+    assert len(res_pe_pos["key_evidence"]) >= 1
+
+    pe_neg_rec = {
+        "person_id": 3,
+        "visit_occurrence_id": 300,
+        "notes_formatted_text": "[Note 2 | Date: 2026-03-02] CTA chest negative for pulmonary embolism. No acute cardiopulmonary process.",
+    }
+    res_pe_neg = adjudicate_clinical_rules(
+        [pe_neg_rec],
+        "Pulmonary Embolism",
+        clinical_criteria="1. CTA chest with filling defect\n2. Acute pulmonary embolism",
+    )[0]
+    assert res_pe_neg["condition_present"] is False
+    assert res_pe_neg["phenotype_status"] == "CONFIRMED_NEGATIVE"
+
+
+def test_evidence_quote_grounding_filters_hallucinations():
+    from app.clinical_rules import verify_and_ground_adjudication
+
+    rec = {
+        "person_id": 10,
+        "visit_occurrence_id": 500,
+        "notes_formatted_text": "[Note 9001 | Date: 2026-03-05] Patient in septic shock with lactate 4.5 mmol/L on norepinephrine.",
+    }
+    adjudication = {
+        "person_id": 10,
+        "visit_occurrence_id": 500,
+        "condition_present": True,
+        "phenotype_status": "CONFIRMED_POSITIVE",
+        "confidence_score": 0.95,
+        "primary_criteria_met": ["Septic shock"],
+        "key_evidence": [
+            {
+                "note_id": 9001,
+                "note_date": "2026-03-05",
+                "evidence_quote": "Completely fabricated quote that does not exist anywhere in the chart",
+                "interpretation": "Hallucinated evidence",
+            },
+            {
+                "note_id": 9001,
+                "note_date": "2026-03-05",
+                "evidence_quote": "Patient in septic shock with lactate 4.5 mmol/L on norepinephrine.",
+                "interpretation": "Grounded evidence",
+            },
+        ],
+        "clinical_rationale": "Documented septic shock.",
+    }
+    grounded = verify_and_ground_adjudication(adjudication, rec, "Sepsis / Septic Shock")
+    assert len(grounded["key_evidence"]) == 1
+    assert "lactate 4.5" in grounded["key_evidence"][0]["evidence_quote"]
+

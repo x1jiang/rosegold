@@ -428,7 +428,7 @@ class AdjudicationEngine:
                 self.backend_error
                 or f"Requested LLM backend '{_backend_name()}' is not available."
             )
-        return self._mock_adjudicate(records, target_condition)
+        return self._mock_adjudicate(records, target_condition, clinical_criteria)
 
     def _vllm_adjudicate(
         self,
@@ -438,6 +438,8 @@ class AdjudicationEngine:
     ) -> List[Dict[str, Any]]:
 
         from vllm import SamplingParams
+        from app.vertex_engine import _parse_model_json
+        from app.clinical_rules import verify_and_ground_adjudication
         try:
             from vllm.sampling_params import GuidedDecodingParams
             guided_decoding = GuidedDecodingParams(json=json.dumps(RoseGoldAdjudication.model_json_schema()))
@@ -473,12 +475,16 @@ class AdjudicationEngine:
         for rec, out in zip(records, outputs):
             text = out.outputs[0].text.strip()
             try:
-                parsed = json.loads(text)
-                parsed['person_id'] = rec['person_id']
-                parsed['visit_occurrence_id'] = rec['visit_occurrence_id']
-                parsed['adjudication_timestamp'] = timestamp
-                parsed['inference_backend'] = f"vllm:{self.model_name}"
-                results.append(RoseGoldAdjudication(**parsed).model_dump())
+                parsed = _parse_model_json(text)
+                payload = parsed.model_dump()
+                payload['person_id'] = rec['person_id']
+                payload['visit_occurrence_id'] = rec['visit_occurrence_id']
+                payload['adjudication_timestamp'] = timestamp
+                payload['inference_backend'] = f"vllm:{self.model_name}"
+                payload = verify_and_ground_adjudication(
+                    payload, rec, target_condition, clinical_criteria
+                )
+                results.append(payload)
             except Exception as e:
                 results.append({
                     'person_id': rec['person_id'],
@@ -488,12 +494,24 @@ class AdjudicationEngine:
                     'confidence_score': 0.0,
                     'primary_criteria_met': [],
                     'key_evidence': [],
-                    'clinical_rationale': f"Parsing error: {e}",
-                    'adjudication_timestamp': timestamp
+                    'clinical_rationale': f"Parsing error: {type(e).__name__}",
+                    'adjudication_timestamp': timestamp,
+                    'inference_backend': f"vllm:{self.model_name}"
                 })
         return results
 
-    def _mock_adjudicate(self, records: List[Dict[str, Any]], target_condition: str) -> List[Dict[str, Any]]:
+    def _mock_adjudicate(
+        self,
+        records: List[Dict[str, Any]],
+        target_condition: str,
+        clinical_criteria: str = "",
+    ) -> List[Dict[str, Any]]:
         from app.clinical_rules import adjudicate_clinical_rules
-        return adjudicate_clinical_rules(records, target_condition, backend_tag="keyword_rules")
+        return adjudicate_clinical_rules(
+            records,
+            target_condition,
+            backend_tag="keyword_rules",
+            clinical_criteria=clinical_criteria,
+        )
+
 

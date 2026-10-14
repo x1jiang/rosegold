@@ -167,7 +167,10 @@ class OpenAICompatEngine:
                 )
                 text = response.choices[0].message.content or ""
                 parsed = _parse_model_json(text)
-                payload = parsed.model_dump()
+                from app.clinical_rules import verify_and_ground_adjudication
+                payload = verify_and_ground_adjudication(
+                    parsed.model_dump(), rec, target_condition, clinical_criteria
+                )
             except Exception as exc:
                 logger.warning(
                     "Hosted LLM adjudication failed for visit %s: %s",

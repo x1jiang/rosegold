@@ -73,7 +73,7 @@ class CPULlamaGemmaEngine:
         """Executes CPU batch adjudication."""
         if self.is_hf_loaded and self.model is not None and self.tokenizer is not None:
             return self._run_hf_cpu_generation(records, target_condition, clinical_criteria)
-        return self._cpu_rule_adjudicate(records, target_condition)
+        return self._cpu_rule_adjudicate(records, target_condition, clinical_criteria)
 
     def _run_hf_cpu_generation(
         self,
@@ -81,6 +81,9 @@ class CPULlamaGemmaEngine:
         target_condition: str,
         clinical_criteria: str
     ) -> List[Dict[str, Any]]:
+        from app.vertex_engine import _parse_model_json
+        from app.clinical_rules import verify_and_ground_adjudication
+
         results = []
         schema_json = json.dumps(RoseGoldAdjudication.model_json_schema())
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -118,25 +121,33 @@ class CPULlamaGemmaEngine:
             gen_text = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
 
             try:
-                # Extract JSON block
-                if "{" in gen_text and "}" in gen_text:
-                    json_str = gen_text[gen_text.find("{"):gen_text.rfind("}")+1]
-                    parsed = json.loads(json_str)
-                else:
-                    parsed = json.loads(gen_text)
-                
+                parsed = _parse_model_json(gen_text).model_dump()
                 parsed['person_id'] = rec['person_id']
                 parsed['visit_occurrence_id'] = rec['visit_occurrence_id']
                 parsed['adjudication_timestamp'] = timestamp
-                results.append(RoseGoldAdjudication(**parsed).model_dump())
+                parsed['inference_backend'] = f"hf_cpu:{self.model_name}"
+                parsed = verify_and_ground_adjudication(
+                    parsed, rec, target_condition, clinical_criteria
+                )
+                results.append(parsed)
             except Exception as e:
-                results.append(self._fallback_record(rec, str(e), timestamp))
+                results.append(self._fallback_record(rec, type(e).__name__, timestamp))
 
         return results
 
-    def _cpu_rule_adjudicate(self, records: List[Dict[str, Any]], target_condition: str) -> List[Dict[str, Any]]:
+    def _cpu_rule_adjudicate(
+        self,
+        records: List[Dict[str, Any]],
+        target_condition: str,
+        clinical_criteria: str = "",
+    ) -> List[Dict[str, Any]]:
         from app.clinical_rules import adjudicate_clinical_rules
-        return adjudicate_clinical_rules(records, target_condition, backend_tag="cpu_rules")
+        return adjudicate_clinical_rules(
+            records,
+            target_condition,
+            backend_tag="cpu_rules",
+            clinical_criteria=clinical_criteria,
+        )
 
     def _fallback_record(self, rec: Dict[str, Any], err_msg: str, timestamp: str) -> Dict[str, Any]:
         return {

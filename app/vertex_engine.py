@@ -35,22 +35,70 @@ def _location() -> str:
     return os.getenv("ROSEGOLD_VERTEX_LOCATION", "us-central1").strip() or "us-central1"
 
 
+def _extract_balanced_json(text: str) -> str:
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    in_str = False
+    escape = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if not in_str:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : idx + 1]
+    end = text.rfind("}")
+    return text[start : end + 1] if end > start else text[start:]
+
+
 def _parse_model_json(text: str) -> RoseGoldAdjudication:
+    import re as _re
+
     raw = (text or "").strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1]
         if raw.endswith("```"):
-            raw = raw[: -3]
+            raw = raw[:-3]
         raw = raw.strip()
         if raw.lower().startswith("json"):
             raw = raw[4:].strip()
-    payload = json.loads(raw)
+    if not raw.startswith("{") or not raw.endswith("}"):
+        raw = _extract_balanced_json(raw)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        # Remove trailing commas before } or ]
+        repaired = _re.sub(r",\s*([}\]])", r"\1", raw)
+        payload = json.loads(repaired)
     if isinstance(payload, dict) and "clinical_rationale" not in payload:
         for value in payload.values():
-            if isinstance(value, dict) and "clinical_rationale" in value:
+            if isinstance(value, dict) and (
+                "clinical_rationale" in value or "phenotype_status" in value
+            ):
                 payload = value
                 break
+    if isinstance(payload, dict) and not payload.get("clinical_rationale"):
+        payload["clinical_rationale"] = str(
+            payload.get("rationale")
+            or payload.get("reasoning")
+            or payload.get("explanation")
+            or "Clinical chart review completed."
+        )
     return RoseGoldAdjudication.model_validate(payload)
+
 
 
 class VertexGeminiEngine:
@@ -108,7 +156,10 @@ class VertexGeminiEngine:
                     ),
                 )
                 parsed = _parse_model_json(response.text)
-                payload = parsed.model_dump()
+                from app.clinical_rules import verify_and_ground_adjudication
+                payload = verify_and_ground_adjudication(
+                    parsed.model_dump(), rec, target_condition, clinical_criteria
+                )
             except Exception as exc:
                 # Log the failure class only; the prompt contains clinical text.
                 logger.warning(

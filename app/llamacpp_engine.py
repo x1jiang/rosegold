@@ -99,11 +99,15 @@ class LlamaCppEngine:
             )
             timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
             try:
+                from app.clinical_rules import verify_and_ground_adjudication
                 parsed = _parse_model_json(text)
                 payload = parsed.model_dump()
+                payload = verify_and_ground_adjudication(
+                    payload, rec, target_condition, clinical_criteria
+                )
             except Exception as exc:
                 payload = {
-                    "clinical_rationale": f"Llama JSON parse failed: {exc}. Raw: {str(text)[:400]}",
+                    "clinical_rationale": f"Llama JSON parse failed ({type(exc).__name__}).",
                     "primary_criteria_met": [],
                     "key_evidence": [],
                     "phenotype_status": "INDETERMINATE_INSUFFICIENT_DATA",
