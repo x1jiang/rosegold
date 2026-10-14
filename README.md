@@ -1,149 +1,298 @@
-# Rose Gold: On-Premises LLM Clinical Chart Adjudication
+# 🩺 Rose Gold: Clinical LLM Chart Adjudication Suite
 
-Turnkey OMOP `NOTE` + `VISIT_OCCURRENCE` clinical phenotyping and chart adjudication for hospital networks and multi-center research consortia. Outputs structured Rose Gold labels with verbatim evidence quotes, clinical rationales, and calibrated confidence scores. 
+**Turnkey OMOP CDM (`NOTE` + `VISIT_OCCURRENCE`) clinical phenotyping and evidence-grounded chart adjudication for hospital networks and multi-center research consortia.**
 
-Rose Gold is the **chart-review layer**, not a model a site must install. It supports **7 execution backends**—including hospital-approved hosted LLMs (Databricks Model Serving, AWS Bedrock) over native Python with **no Docker or Singularity required**—plus on-prem vLLM, two-tier hybrid reasoning, llama.cpp GGUF, Vertex AI, and deterministic rules.
-
----
-
-## Table of Contents
-
-- [System Architecture](#system-architecture)
-- [Clinical Benchmark: RoseGold Hybrid vs. Frontier LLMs](#clinical-benchmark-rosegold-hybrid-vs-frontier-llms)
-- [Model Execution Backends (How to Run the Model)](#model-execution-backends-how-to-run-the-model)
-  - [1. Two-Tier Hybrid Cascade (Winning Benchmark Architecture)](#1-two-tier-hybrid-cascade-winning-benchmark-architecture)
-  - [2. vLLM Engine (High-Throughput GPU / Multi-GPU)](#2-vllm-engine-high-throughput-gpu--multi-gpu)
-  - [3. llama.cpp CPU Engine (Quantized GGUF, Zero GPU)](#3-llamacpp-cpu-engine-quantized-gguf-zero-gpu)
-  - [4. Vertex AI / Gemini Engine (Cloud-Managed)](#4-vertex-ai--gemini-engine-cloud-managed)
-  - [5. Hospital-Approved Hosted LLMs (Bedrock Mantle / Databricks)](#5-hospital-approved-hosted-llms-bedrock-mantle--databricks)
-  - [6. Deterministic Clinical Rules / Mock Engine (CI/CD & Fast Tests)](#6-deterministic-clinical-rules--mock-engine-cicd--fast-tests)
-- [Environment Variables Reference](#environment-variables-reference)
-- [OMOP CDM Data Contract & Ingestion](#omop-cdm-data-contract--ingestion)
-- [Quick Start Guide](#quick-start-guide)
-- [CLI Batch Adjudication Manual](#cli-batch-adjudication-manual)
-- [REST API Reference & Client Examples](#rest-api-reference--client-examples)
-- [Interactive Web Dashboard (Streamlit)](#interactive-web-dashboard-streamlit)
-- [Deployment Topologies](#deployment-topologies)
-  - [A. Rootless Docker & Rootless Podman (Hospital Firewalls)](#a-rootless-docker--rootless-podman-hospital-firewalls)
-  - [B. Multi-GPU Server (Docker Compose + Tensor Parallelism)](#b-multi-gpu-server-docker-compose--tensor-parallelism)
-  - [C. Google Cloud Run (Serverless CPU + GCS Storage)](#c-google-cloud-run-serverless-cpu--gcs-storage)
-  - [D. Air-Gapped Hospital On-Premises (100% Offline & HIPAA Compliant)](#d-air-gapped-hospital-on-premises-100-offline--hipaa-compliant)
-  - [E. Singularity & Apptainer (HPC clusters)](#e-singularity--apptainer-hpc-clusters)
-  - [F. Native Python, No Container (Hospital BYO-LLM)](#f-native-python-no-container-hospital-byo-llm)
-- [Security & Hardening](#security--hardening)
-- [Phenotypes & Custom Criteria](#phenotypes--custom-criteria)
-- [MIMIC-III-Ext-Notes Benchmark](#mimic-iii-ext-notes-benchmark)
-- [Troubleshooting & FAQ](#troubleshooting--faq)
+🌐 **Live Interactive Web Portal:** [https://rosegold-eoohrvwf7q-uc.a.run.app](https://rosegold-eoohrvwf7q-uc.a.run.app)
 
 ---
 
-## System Architecture
+## Why Rose Gold?
 
-Rose Gold decouples high-throughput clinical data ingestion, tiered inference, and downstream OMOP integration:
+- **Evidence-Grounded Adjudication**: Produces structured `RoseGoldAdjudication` labels (`CONFIRMED_POSITIVE`, `SUSPECTED_PROBABLE`, `CONFIRMED_NEGATIVE`, `INDETERMINATE_INSUFFICIENT_DATA`) with **verbatim clinical quotes**, Note IDs, dates, chain-of-thought rationales, and calibrated `[0.0, 1.0]` confidence scores.
+- **Anti-Hallucination Verification**: Automatically verifies every LLM-cited quote against the patient's chart (`verify_and_ground_adjudication`), strips ungrounded hallucinations, and normalizes malformed LLM JSON outputs.
+- **Flexible Site Deployment (7 Backends, Container Optional)**:
+  - **No Container / BYO Hospital LLM**: Native Python calling **AWS Bedrock Mantle**, **Databricks Model Serving**, or **Google Vertex AI Gemini**.
+  - **On-Premises GPU**: High-throughput **vLLM** (`Llama-3.1-8B`, `Llama-3.3-70B-AWQ`, `Gemma-2-9B`) or **Two-Tier Hybrid Cascade** (`Rules + Muse-30B`).
+  - **Zero-GPU CPU**: Quantized 4-bit **`llama.cpp` GGUF** (`Llama-3.2-3B-Instruct`) or instant **Deterministic Clinical Rules** (`keyword_rules`).
+
+---
+
+## 🧭 Table of Contents
+
+1. [⚡ 60-Second Quick Start](#-60-second-quick-start)
+2. [🗺️ Visual Architecture & Decision Guide](#️-visual-architecture--decision-guide)
+   - [Diagram 1: End-to-End Adjudication Pipeline](#1-end-to-end-adjudication-pipeline)
+   - [Diagram 2: Which Execution Path Fits Your Site?](#2-which-execution-path-fits-your-site)
+   - [Diagram 3: Request & Evidence Grounding Sequence](#3-request--evidence-grounding-sequence)
+3. [🏆 Clinical Benchmark](#-clinical-benchmark)
+4. [🔌 Model Execution Backends (Copy-Paste Setup)](#-model-execution-backends-copy-paste-setup)
+5. [🖥️ Using Rose Gold: Web Portal, CLI & REST API](#️-using-rose-gold-web-portal-cli--rest-api)
+6. [🚀 Deployment Topologies (Docker, Singularity/HPC, Cloud Run, Air-Gapped)](#-deployment-topologies-docker-singularityhpc-cloud-run-air-gapped)
+7. [📋 OMOP CDM Data Contract & Custom Phenotypes](#-omop-cdm-data-contract--custom-phenotypes)
+8. [⚙️ Environment Variables Reference](#️-environment-variables-reference)
+9. [🔒 Security & Production Hardening](#-security--production-hardening)
+10. [❓ Troubleshooting & FAQ](#-troubleshooting--faq)
+
+---
+
+## ⚡ 60-Second Quick Start
+
+### Step 1: Clone & Install (Python 3.11+)
+
+```bash
+git clone https://github.com/x1jiang/rosegold.git
+cd rosegold
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Step 2: Choose How to Run (Pick One)
+
+#### Option A — Instant Local Demo (Zero GPU, Zero Model Download)
+Uses the built-in deterministic clinical rule engine (`keyword_rules`) on the bundled 20-visit synthetic OMOP cohort:
+```bash
+export ROSEGOLD_LLM_BACKEND="keyword_rules"
+export ROSEGOLD_ALLOW_MOCK="1"
+./start_services.sh
+```
+
+#### Option B — Local CPU LLM (`llama.cpp` 4-Bit GGUF, No GPU Needed)
+Automatically downloads and runs `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (~2 GB) on CPU:
+```bash
+export ROSEGOLD_LLM_BACKEND="llamacpp"
+export ROSEGOLD_MODEL_DIR="./models"
+./start_services.sh
+```
+
+#### Option C — Hospital-Approved Cloud LLM (AWS Bedrock Mantle / Databricks)
+No local weights, no Docker, and no Singularity required. Calls your institution's approved endpoint over HTTPS:
+```bash
+export ROSEGOLD_LLM_BACKEND="mantle"
+export AWS_REGION="us-west-2"
+export AWS_BEARER_TOKEN_BEDROCK="your-bedrock-api-key"
+export ROSEGOLD_OPENAI_MODEL="your-approved-model-id"
+./start_services.sh
+```
+
+#### Option D — Local NVIDIA GPU (`vLLM`)
+```bash
+export ROSEGOLD_LLM_BACKEND="vllm"
+export ROSEGOLD_MODEL_NAME="meta-llama/Llama-3.1-8B-Instruct"
+export HF_TOKEN="hf_..."
+./start_services.sh
+```
+
+### Step 3: Open the Portal or Run a CLI Batch
+
+- **Interactive Web Portal**: [http://localhost:8501](http://localhost:8501)
+- **Swagger REST API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Offline CLI Batch**:
+  ```bash
+  python -m app.adjudicator \
+    --notes_path data/synthetic_notes.csv \
+    --visits_path data/synthetic_visits.csv \
+    --target_condition "Sepsis / Septic Shock" \
+    --output_path outputs/rose_gold_adjudications.csv
+  ```
+
+---
+
+## 🗺️ Visual Architecture & Decision Guide
+
+### 1. End-to-End Adjudication Pipeline
 
 ```mermaid
-flowchart TD
-    subgraph DataIngestion["1. Clinical Data Ingestion"]
-        N[OMOP NOTE Table\nCSV / Parquet] --> Loader[OMOP Chart Loader\napp.omop_loader]
-        V[OMOP VISIT_OCCURRENCE\nCSV / Parquet] --> Loader
-        M[MIMIC-III-Ext-Notes\nPhysioNet notes.csv] --> Loader
-        Loader --> Prepped[Chronological Encounter Trajectory\nCached by file stamp]
+flowchart LR
+    subgraph Ingest["1. Data Ingestion"]
+        A1["OMOP NOTE<br/>(.csv / .parquet)"] --> L["Chart Loader<br/>(app/omop_loader.py)"]
+        A2["OMOP VISIT_OCCURRENCE<br/>(.csv / .parquet)"] --> L
+        A3["MIMIC-III-Ext-Notes<br/>(notes.csv)"] --> L
+        L --> T["Chronological Visit<br/>Note Trajectory"]
     end
 
-    subgraph TieredCascade["2. Three-Tier Adjudication Cascade"]
-        Prepped --> T1["Tier 1: Deterministic NLP Pre-Filter\n(Clause Segmentation & Negation Screening ±70 chars)"]
-        T1 -- "No positive triggers (<0.01s)" --> RuleOut["Instant Fast Rule-Out\nCONFIRMED_NEGATIVE"]
-        T1 -- "Candidate triggers present" --> T2["Tier 2: Deep Clinical LLM Reasoning\n• Site-approved Bedrock Mantle (OpenAI-compatible)\n• vLLM (Llama-3.1-8B, Gemma-2-9b)\n• Two-Tier Hybrid (Muse-Glimmer-30B)\n• llama.cpp (Llama-3.2-3B GGUF on CPU)\n• Vertex AI (Gemini 1.5/2.x)"]
-        T2 --> T3["Tier 3: Consensus Arbitration & Provenance\n• Strict Pydantic JSON Schema Guided Decoding\n• Verbatim Quote Extraction with Note ID & Date\n• Calibrated Confidence Probability (0.0 - 1.0)"]
+    subgraph Engine["2. Tiered Adjudication Engine"]
+        T --> R1["Tier 1: Clinical Rules &<br/>Negation Screen (±70 chars)"]
+        R1 -- "Fast Rule-Out" --> V["Schema & Evidence<br/>Grounding Guard"]
+        R1 -- "LLM Reasoning" --> R2["Tier 2: LLM Backend<br/>• Bedrock Mantle / Databricks<br/>• vLLM (Llama / Gemma)<br/>• Hybrid (Rules + Muse-30B)<br/>• llama.cpp (CPU GGUF)<br/>• Vertex AI Gemini"]
+        R2 --> V
     end
 
-    subgraph Delivery["3. Integration & Downstream Delivery"]
-        T3 --> UI["Streamlit Web UI (:8501)\nPhysician Review & Override Loop"]
-        T3 --> API["FastAPI Service (:8000)\nREST API & Microservices"]
-        T3 --> CLI["CLI Batch Pipeline\nResume checkpoint from JSONL"]
-        UI & API & CLI --> Exp["Standard OMOP CDM v5.4\nOBSERVATION Table Export (SNOMED-CT)\n+ CSV, Parquet, JSONL, Audit Logs"]
+    subgraph Grounding["3. Verification & Guardrails"]
+        V --> G1["Balanced JSON Parser &<br/>Self-Healing Pydantic Schema"]
+        G1 --> G2["Chart Quote Verification<br/>(Strips Hallucinations)"]
     end
+
+    subgraph Output["4. Review & OMOP Export"]
+        G2 --> O1["Streamlit Web Portal (:8501)<br/>Inline Evidence Highlighting"]
+        G2 --> O2["FastAPI REST (:8000)<br/>& CLI Checkpoint Pipeline"]
+        O1 & O2 --> O3["OMOP OBSERVATION Table<br/>+ CSV / Parquet / JSONL<br/>+ Physician Audit Log"]
+    end
+
+    classDef ingest fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1.5px;
+    classDef engine fill:#fff8e1,stroke:#f57f17,color:#e65100,stroke-width:1.5px;
+    classDef guard fill:#fce4ec,stroke:#c2185b,color:#880e4f,stroke-width:1.5px;
+    classDef output fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1.5px;
+
+    class A1,A2,A3,L,T ingest;
+    class R1,R2 engine;
+    class V,G1,G2 guard;
+    class O1,O2,O3 output;
 ```
 
 ---
 
-## Clinical Benchmark: RoseGold Hybrid vs. Frontier LLMs
+### 2. Which Execution Path Fits Your Site?
 
-Empirical evaluation on clinical inpatient encounters across 4 consensus phenotypes (*Acute Ischemic Stroke*, *Acute Respiratory Distress Syndrome*, *Acute Kidney Injury*, and *Sepsis / Septic Shock*):
+Use this decision tree to choose the right backend and deployment mode for your environment:
 
-| Model Architecture & Tier | Adjudication Paradigm | Overall Accuracy | Cohen's $\kappa$ | Sensitivity (Recall) | Specificity | False Positives | False Negatives | Avg Latency / Visit | Deployment Boundary |
+```mermaid
+flowchart TD
+    Start(["Where are you deploying Rose Gold?"]) --> Q1{"Does your site already have an<br/>approved Cloud LLM endpoint?<br/>(Bedrock / Databricks / Vertex)"}
+
+    Q1 -- "Yes" --> PathCloud["✅ Native Python + Hosted LLM<br/>• ROSEGOLD_LLM_BACKEND=mantle | databricks | vertex<br/>• No Docker, no Singularity, no GPU required"]
+
+    Q1 -- "No (Run On-Prem / Local)" --> Q2{"What compute environment<br/>are you running on?"}
+
+    Q2 -- "HPC Cluster (Slurm / PBS)<br/>No root / Docker blocked" --> Q3{"GPU Node Available?"}
+    Q3 -- "Yes (--nv)" --> PathSingGPU["🚀 Singularity GPU (.sif)<br/>• singularity/rosegold.def<br/>• ROSEGOLD_LLM_BACKEND=vllm"]
+    Q3 -- "No (CPU Node)" --> PathSingCPU["💻 Singularity CPU (.sif)<br/>• singularity/rosegold_cpu.def<br/>• ROSEGOLD_LLM_BACKEND=llamacpp"]
+
+    Q2 -- "Linux Server / Workstation" --> Q4{"NVIDIA GPU Available?"}
+    Q4 -- "Yes (16GB+ VRAM)" --> PathGPU["⚡ vLLM or Hybrid GPU<br/>• Docker Compose or Native Python<br/>• ROSEGOLD_LLM_BACKEND=vllm | hybrid"]
+    Q4 -- "No (CPU / Laptop)" --> PathCPU["🖥️ llama.cpp CPU GGUF<br/>• Dockerfile.cpu or Native Python<br/>• ROSEGOLD_LLM_BACKEND=llamacpp"]
+
+    Q2 -- "Google Cloud Serverless" --> PathCR["☁️ Google Cloud Run<br/>• ./deploy_to_gcp.sh<br/>• Baked Llama-3.2-3B GGUF + GCS Mount"]
+
+    classDef cloud fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1.5px;
+    classDef gpu fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1.5px;
+    classDef cpu fill:#fff8e1,stroke:#f57f17,color:#e65100,stroke-width:1.5px;
+
+    class PathCloud,PathCR cloud;
+    class PathSingGPU,PathGPU gpu;
+    class PathSingCPU,PathCPU cpu;
+```
+
+---
+
+### 3. Request & Evidence Grounding Sequence
+
+Every adjudication passes through schema normalization and anti-hallucination chart verification before reaching the clinician or output tables:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Clinician / CLI
+    participant UI as Web Portal (:8501)
+    participant API as FastAPI (:8000)
+    participant Eng as AdjudicationEngine
+    participant Guard as Schema & Grounding Guard
+    participant Store as Durable Store (GCS / Local)
+
+    User->>UI: Select Visit & Click "Adjudicate"
+    UI->>API: POST /api/adjudicate/single
+    API->>Eng: adjudicate_single(record, condition, criteria)
+    Eng->>Eng: Execute Configured Backend (LLM or Rules)
+    Eng->>Guard: _parse_model_json() + RoseGoldAdjudication
+    Guard->>Guard: Normalize status, clamp confidence [0,1], coerce note_id
+    Guard->>Guard: verify_and_ground_adjudication() against chart text
+    Guard-->>API: Verified Adjudication Payload
+    API-->>UI: JSON Response + X-Request-ID
+    UI-->>User: Render Status + Highlight Verbatim Quotes in Notes
+    User->>UI: Click "Sign & Save Verification"
+    UI->>API: POST /api/feedback
+    API->>Store: Atomic append to human_audit_log.jsonl
+```
+
+---
+
+## 🏆 Clinical Benchmark
+
+Empirical evaluation on inpatient clinical encounters across 4 consensus phenotypes (*Sepsis / Septic Shock*, *Acute Ischemic Stroke*, *Acute Respiratory Distress Syndrome*, and *Acute Kidney Injury*):
+
+| Model Architecture | Paradigm | Accuracy | Cohen's $\kappa$ | Sensitivity | Specificity | False Pos | False Neg | Avg Latency | PHI Boundary |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **RoseGold Hybrid (Rules + Muse-30B)** | **Two-Tier Hybrid Cascade** | **93.8%** | **0.875** | **87.5%** | **100.0%** | **0** | **1** | **0.66s** | **100% On-Premises (Internal GPU)** |
-| **Barebone GPT-5.6-Luna** | Standalone Frontier Cloud API | **81.2%** | **0.625** | **62.5%** | **100.0%** | **0** | **3** | **2.37s** | External Cloud API (OpenAI) |
-
-### Why the Hybrid Architecture Wins:
-- **Tier 1 (Deterministic NLP Pre-Filter)**: High-speed clause segmentation and bidirectional negation screening (±70 characters) instantly eliminate 70% of negative encounters (< 0.01s), preventing wasteful LLM compute.
-- **Tier 2 (Muse-Glimmer-30B Clinical Reasoner)**: On-premises 30B MoE/Dense reasoning on GPU adjudicates complex candidate evidence, verifies clinical plausibility, rules out mimics, and generates step-by-step chain-of-thought rationale.
-- **Tier 3 (Consensus Arbitration & Provenance)**: Reconciles syndrome equivalents, extracts verbatim evidence quotes with Note ID and timestamp, and records physician review in durable audit logs.
-- **100% On-Premises & Zero PHI Risk**: Complies with hospital IRB, MIMIC Data Use Agreements, and HIPAA regulations without external cloud data exfiltration.
+| **RoseGold Hybrid (Rules + Muse-30B)** | **Two-Tier Cascade** | **93.8%** | **0.875** | **87.5%** | **100.0%** | **0** | **1** | **0.66s** | **100% On-Premises** |
+| **Standalone Frontier Cloud LLM** | Direct Cloud API | **81.2%** | **0.625** | **62.5%** | **100.0%** | **0** | **3** | **2.37s** | External Cloud API |
 
 ---
 
-## Model Execution Backends (How to Run the Model)
+## 🔌 Model Execution Backends (Copy-Paste Setup)
 
-Rose Gold provides a unified `AdjudicationEngine` that automatically detects available hardware or lets you explicitly select the execution engine via the `ROSEGOLD_LLM_BACKEND` environment variable.
+Set `ROSEGOLD_LLM_BACKEND` to select your execution engine. When a real LLM backend is configured, Rose Gold **fails closed** (`HTTP 503`) rather than silently substituting keyword heuristics unless `ROSEGOLD_ALLOW_MOCK=1` is set.
 
-| Backend Identifier | Engine Type | Recommended Hardware | Key Advantages |
+| `ROSEGOLD_LLM_BACKEND` | Engine | Hardware Required | Best For |
 | :--- | :--- | :--- | :--- |
-| `hybrid` / `rosegold_hybrid` | Two-Tier Cascade (Rules + Muse-30B) | Remote GPU endpoint or local GPU | Highest accuracy (93.8%), ultra-fast latency (0.66s) |
-| `vllm` | vLLM Engine | NVIDIA GPU (16GB - 80GB VRAM) | Maximum throughput, prefix caching, guided decoding |
-| `llamacpp` / `gguf` | llama.cpp Python | Commodity CPU (4+ cores, 8GB RAM) | Zero-GPU local run, auto-downloads 4-bit GGUF |
-| `vertex` / `gemini` | Google Vertex AI | Cloud VM / Serverless | Managed cloud API, zero weight storage on node |
-| `mantle` / `bedrock` | Amazon Bedrock Mantle (OpenAI Chat Completions) | Bedrock API key + region | **Recommended no-container path.** No local model, no Docker, no boto3. |
-| `databricks` / `openai` | Site-approved hosted LLM | Databricks / any OpenAI-compatible gateway | Alternate if Mantle is not the approved path. |
-| `keyword_rules` / `mock` | Rule-based Engine | Any CPU (< 1GB RAM) | Zero dependencies, instant offline testing & CI/CD |
+| `mantle` / `bedrock` | Amazon Bedrock Mantle | None (HTTPS API) | **Recommended no-container hospital path** |
+| `databricks` / `openai` | OpenAI-Compatible Hosted | None (HTTPS API) | Sites with Databricks Serving or internal LLM gateways |
+| `vertex` / `gemini` | Google Vertex AI Gemini | None (HTTPS API) | GCP healthcare environments under HIPAA BAA |
+| `vllm` | vLLM Guided Decoding | NVIDIA GPU (16–80 GB VRAM) | High-throughput local GPU servers |
+| `hybrid` | Rules + Muse-Glimmer-30B | Internal GPU Endpoint | Highest accuracy (93.8%) & sub-second screening |
+| `llamacpp` | `llama.cpp` 4-Bit GGUF | CPU (4+ cores, 8 GB RAM) | Laptops, CPU-only servers, Cloud Run, CPU HPC nodes |
+| `keyword_rules` | Deterministic Clinical Rules | Any CPU (< 1 GB RAM) | Instant offline testing, CI/CD, rule baseline |
 
----
+### Backend 1: Hospital-Approved Hosted LLMs (Bedrock Mantle / Databricks)
 
-### 1. Two-Tier Hybrid Cascade (Winning Benchmark Architecture)
-
-The Two-Tier Hybrid engine pairs deterministic negation/trigger pre-screening with deep reasoning via a remote or local Muse-Glimmer-30B model.
+Sites with an IT-approved LLM endpoint do **not** need Docker, Singularity, or local GPU weights. Copy [`configs/site.env.example`](configs/site.env.example) and verify your setup (secrets are automatically redacted):
 
 ```bash
-# Enable the hybrid backend
-export ROSEGOLD_LLM_BACKEND="hybrid"
+# Amazon Bedrock Mantle (OpenAI-compatible Chat Completions)
+export ROSEGOLD_LLM_BACKEND="mantle"
+export AWS_REGION="us-west-2"
+export AWS_BEARER_TOKEN_BEDROCK="your-bedrock-api-key"
+export ROSEGOLD_OPENAI_MODEL="your-approved-mantle-model"
 
-# Specify the Muse-Glimmer endpoint (internal hospital cluster or local sglang/vLLM server).
-# Required: there is no default. Clinical notes are POSTed here, so it must be https://
-# (plain http:// is accepted only for loopback, or with ROSEGOLD_MUSE_ALLOW_HTTP=1 on a private network).
-export ROSEGOLD_MUSE_URL="https://muse.your-hospital.internal/v1/completions"
-export ROSEGOLD_MUSE_MODEL="Muse-Glimmer-30B"
-export ROSEGOLD_MUSE_API_KEY="..."   # optional bearer token for the endpoint
+# Verify configuration (redacts tokens)
+python -m app.hosted_llm
 
 # Run batch adjudication
-python -m app.adjudicator \
+python -m app.adjudicator --backend mantle \
   --notes_path data/synthetic_notes.csv \
   --visits_path data/synthetic_visits.csv \
   --target_condition "Sepsis / Septic Shock"
 ```
 
+<details>
+<summary><b>Click to expand: Databricks Model Serving & Native Bedrock Converse</b></summary>
+
+```bash
+# Databricks Model Serving
+export ROSEGOLD_LLM_BACKEND="databricks"
+export DATABRICKS_HOST="https://YOUR-WORKSPACE.azuredatabricks.net"
+export DATABRICKS_TOKEN="dapi..."
+export ROSEGOLD_OPENAI_MODEL="your-serving-endpoint"
+
+python -m app.adjudicator --backend databricks \
+  --notes_path data/synthetic_notes.csv \
+  --visits_path data/synthetic_visits.csv
+```
+
+```bash
+# Native AWS Bedrock Runtime Converse (requires: pip install -r requirements-bedrock.txt)
+export ROSEGOLD_LLM_BACKEND="bedrock_converse"
+export AWS_REGION="us-west-2"
+export ROSEGOLD_BEDROCK_MODEL="anthropic.claude-3-5-sonnet-20241022-v2:0"
+```
+</details>
+
 ---
 
-### 2. vLLM Engine (High-Throughput GPU / Multi-GPU)
+### Backend 2: Local GPU with vLLM (Single or Multi-GPU)
 
-The vLLM backend provides high-performance batched inference with Pydantic JSON schema guided decoding and KV prefix caching.
-
-#### Single GPU (RTX 3090/4090, A10G, L4, A100):
 ```bash
 export ROSEGOLD_LLM_BACKEND="vllm"
-export ROSEGOLD_MODEL_NAME="meta-llama/Llama-3.1-8B-Instruct"
-export HF_TOKEN="your_huggingface_token"
+export HF_TOKEN="hf_your_token"
 
+# Single GPU (e.g., L4, A10G, RTX 4090, A100)
 python -m app.adjudicator \
   --notes_path data/synthetic_notes.csv \
   --visits_path data/synthetic_visits.csv \
   --model_name "meta-llama/Llama-3.1-8B-Instruct" \
   --tensor_parallel_size 1 \
   --max_model_len 32768
-```
 
-#### Multi-GPU Tensor Parallelism (2x or 4x A100/H100) with FP8 Quantization:
-```bash
+# Multi-GPU Tensor Parallelism (4x A100/H100 with FP8 quantization)
 python -m app.adjudicator \
   --notes_path data/synthetic_notes.csv \
   --visits_path data/synthetic_visits.csv \
@@ -153,23 +302,14 @@ python -m app.adjudicator \
   --max_model_len 65536
 ```
 
-Supported out-of-the-box model families:
-- `meta-llama/Llama-3.1-8B-Instruct`
-- `google/gemma-2-9b-it`
-- `muse-glimmer-30b`
-
 ---
 
-### 3. llama.cpp CPU Engine (Quantized GGUF, Zero GPU)
-
-Run full LLM adjudication on a standard laptop or CPU-only cloud VM using 4-bit quantized GGUF weights. The engine automatically downloads and caches the model from Hugging Face on first execution.
+### Backend 3: Local CPU with `llama.cpp` (Zero GPU)
 
 ```bash
 export ROSEGOLD_LLM_BACKEND="llamacpp"
 export ROSEGOLD_LLAMA_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
 export ROSEGOLD_LLAMA_GGUF="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-
-# Optional: Set local weight cache directory
 export ROSEGOLD_MODEL_DIR="./models"
 
 python -m app.adjudicator \
@@ -180,16 +320,27 @@ python -m app.adjudicator \
 
 ---
 
-### 4. Vertex AI / Gemini Engine (Cloud-Managed)
+### Backend 4: Two-Tier Hybrid Cascade (`Rules + Muse-30B`)
 
-Execute adjudication using Google Cloud Vertex AI (Gemini 1.5 / 2.0) with HIPAA BAA compliance:
+```bash
+export ROSEGOLD_LLM_BACKEND="hybrid"
+export ROSEGOLD_MUSE_URL="https://muse.your-hospital.internal/v1/completions"
+export ROSEGOLD_MUSE_MODEL="Muse-Glimmer-30B"
+export ROSEGOLD_MUSE_API_KEY="optional-bearer-token"
+
+python -m app.adjudicator \
+  --notes_path data/synthetic_notes.csv \
+  --visits_path data/synthetic_visits.csv \
+  --target_condition "Sepsis / Septic Shock"
+```
+
+---
+
+### Backend 5: Google Vertex AI Gemini
 
 ```bash
 export ROSEGOLD_LLM_BACKEND="vertex"
 export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
-
-# Or use standard Gemini API key
-export GEMINI_API_KEY="AIzaSy..."
 
 python -m app.adjudicator \
   --notes_path data/synthetic_notes.csv \
@@ -199,323 +350,90 @@ python -m app.adjudicator \
 
 ---
 
-### 5. Hospital-Approved Hosted LLMs (Bedrock Mantle / Databricks)
+## 🖥️ Using Rose Gold: Web Portal, CLI & REST API
 
-Sites that already have an IRB- and IT-approved LLM do **not** install a Rose Gold model, Docker, or Singularity. Rose Gold is a Python package that calls **your** endpoint. Clinical notes leave the process only toward that URL.
+### 1. Interactive Web Portal (`Streamlit` on `:8501`)
 
-**Recommended:** [Amazon Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html) — OpenAI Chat Completions, a Bedrock API key, and the site-approved model id. No boto3 Converse, no container runtime. Mantle uses the same Bedrock inference engine with zero operator access (ZOA).
-
-Copy [`configs/site.env.example`](configs/site.env.example), fill in site values, and confirm configuration (secrets are redacted):
-
+Launch both FastAPI (`:8000`) and the Streamlit clinician portal (`:8501`):
 ```bash
-set -a && source /path/to/your-site.env && set +a
-python -m app.hosted_llm
-```
-
-#### Amazon Bedrock Mantle (recommended)
-
-```bash
-export ROSEGOLD_LLM_BACKEND="mantle"
-export AWS_REGION="us-west-2"
-export AWS_BEARER_TOKEN_BEDROCK="..."          # Bedrock API key, not an OpenAI key
-export ROSEGOLD_OPENAI_MODEL="YOUR-APPROVED-MANTLE-MODEL"
-
-python -m app.adjudicator \
-  --notes_path data/synthetic_notes.csv \
-  --visits_path data/synthetic_visits.csv \
-  --target_condition "Sepsis / Septic Shock" \
-  --backend mantle
-```
-
-The base URL is derived as `https://bedrock-mantle.${AWS_REGION}.api.aws/v1`. Override with `ROSEGOLD_OPENAI_BASE_URL` or `ROSEGOLD_MANTLE_PATH=openai/v1` if the approved model is served on that path. `ROSEGOLD_LLM_BACKEND=bedrock` uses Mantle by default; set `ROSEGOLD_BEDROCK_API=converse` only if IT requires native boto3.
-
-#### Databricks Model Serving (alternate)
-
-```bash
-export ROSEGOLD_LLM_BACKEND="databricks"
-export DATABRICKS_HOST="https://YOUR-WORKSPACE.azuredatabricks.net"
-export DATABRICKS_TOKEN="dapi..."
-export ROSEGOLD_OPENAI_MODEL="YOUR-APPROVED-SERVING-ENDPOINT"
-
-python -m app.adjudicator --backend databricks \
-  --notes_path data/synthetic_notes.csv \
-  --visits_path data/synthetic_visits.csv
-```
-
-An explicit `mantle` / `bedrock` / `databricks` / `openai` / `vertex` / `hybrid` selection **never** loads local vLLM or GGUF weights, even on a GPU workstation.
-
----
-
-### 6. Deterministic Clinical Rules / Mock Engine (CI/CD & Fast Tests)
-
-Instantly test pipelines, UI integration, and OMOP ETL workflows without requiring GPUs, model weights, or network access:
-
-```bash
-export ROSEGOLD_LLM_BACKEND="keyword_rules"
-export ROSEGOLD_ALLOW_MOCK="1"
-
-python -m app.adjudicator \
-  --notes_path data/synthetic_notes.csv \
-  --visits_path data/synthetic_visits.csv
-```
-
----
-
-## Environment Variables Reference
-
-| Variable | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ROSEGOLD_LLM_BACKEND` | `str` | `auto` | Backend selector: `mantle`, `bedrock`, `databricks`, `vllm`, `hybrid`, `llamacpp`, `vertex`, `openai`, or `keyword_rules`. |
-| `AWS_BEARER_TOKEN_BEDROCK` / `ROSEGOLD_OPENAI_API_KEY` | `str` | **required for `mantle`** | Amazon Bedrock API key (not an OpenAI key). Never commit. |
-| `AWS_REGION` / `ROSEGOLD_BEDROCK_REGION` | `str` | `us-west-2` | Region for `https://bedrock-mantle.{region}.api.aws/v1`. |
-| `ROSEGOLD_MANTLE_PATH` | `str` | `v1` | Mantle URL suffix: `v1` (Chat Completions default) or `openai/v1`. |
-| `ROSEGOLD_OPENAI_BASE_URL` | `str` | derived for Mantle | Override the OpenAI-compatible base URL. Must be `https://`. |
-| `ROSEGOLD_OPENAI_MODEL` | `str` | **required for hosted** | Mantle model id or Databricks serving-endpoint name. |
-| `DATABRICKS_HOST` | `str` | **required for `databricks` if no base URL** | Workspace URL; Rose Gold appends `/serving-endpoints`. |
-| `DATABRICKS_TOKEN` | `str` | **required for `databricks`** | Databricks PAT or service-principal token. |
-| `ROSEGOLD_OPENAI_TIMEOUT` | `float` | `45` | Per-visit timeout (seconds) for hosted chat completions. |
-| `ROSEGOLD_OPENAI_ALLOW_HTTP` | `bool` | `0` | Permit a plain-`http://` hosted endpoint on a trusted private network. |
-| `ROSEGOLD_BEDROCK_API` | `str` | unset | Set `converse` to use native boto3 instead of Mantle. |
-| `ROSEGOLD_BEDROCK_MODEL` | `str` | **required for Converse** | Bedrock model id when `ROSEGOLD_BEDROCK_API=converse`. |
-| `ROSEGOLD_MODEL_NAME` | `str` | `auto` | Hugging Face model ID or path. Set to `auto` for hardware-driven selection. |
-| `ROSEGOLD_MUSE_URL` | `str` | **required for `hybrid`** | Completions endpoint for Muse-Glimmer-30B. Must be `https://`; `http://` only for loopback or with `ROSEGOLD_MUSE_ALLOW_HTTP=1`. No default — the hybrid backend refuses to start without it. |
-| `ROSEGOLD_MUSE_MODEL` | `str` | `Muse-Glimmer-30B` | Model name passed to the Muse completion endpoint. |
-| `ROSEGOLD_MUSE_API_KEY` | `str` | `null` | Optional bearer token sent to the Muse endpoint. |
-| `ROSEGOLD_MUSE_TIMEOUT` | `float` | `25` | Per-visit timeout (seconds) for the Muse call; on failure the visit is labelled `hybrid:rules_only(...)`. |
-| `ROSEGOLD_MUSE_ALLOW_HTTP` | `bool` | `0` | Permit a plain-`http://` Muse endpoint on a trusted private network. |
-| `ROSEGOLD_LLAMA_REPO` | `str` | `bartowski/Llama-3.2-3B-Instruct-GGUF` | Hugging Face repository containing GGUF weights for CPU inference. |
-| `ROSEGOLD_LLAMA_GGUF` | `str` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | Filename of the target GGUF file within the repository. |
-| `ROSEGOLD_MODEL_DIR` | `str` | `/tmp/rosegold-models` | Persistent directory for caching downloaded GGUF weights. |
-| `ROSEGOLD_DATA_DIR` | `str` | `data` | Base directory containing OMOP CSV or Parquet files. |
-| `ROSEGOLD_OUTPUT_DIR` | `str` | `outputs` | Output directory for batch results, Parquet files, and audit trails. |
-| `ROSEGOLD_AUDIT_LOG` | `str` | `outputs/human_audit_log.jsonl` | File path where physician agreement and overrides are logged. |
-| `ROSEGOLD_API_URL` | `str` | `http://127.0.0.1:8000` | FastAPI service URL utilized by the Streamlit dashboard. |
-| `ROSEGOLD_ALLOW_MOCK` | `bool` | `0` | Set to `1` to allow deterministic rule fallback when LLM weights fail to load. |
-| `ROSEGOLD_LOAD_CPU_WEIGHTS` | `bool` | `0` | Set to `1` to load unquantized PyTorch Hugging Face weights directly into host RAM. |
-| `HF_TOKEN` | `str` | `null` | Hugging Face token for downloading gated models (Llama 3.1, Gemma 2). |
-| `GOOGLE_CLOUD_PROJECT` | `str` | `null` | Google Cloud Project ID for Vertex AI Gemini execution. |
-| `ROSEGOLD_API_KEY` | `str` | `null` | When set, every `/api/*` route requires `X-API-Key: <key>` (or `Authorization: Bearer <key>`). `/health` stays open but hides file paths and backend error text from unauthenticated callers. The dashboard reads the same variable. |
-| `ROSEGOLD_RATE_LIMIT_PER_MIN` | `int` | `0` (off) | Per-client request cap on `/api/*`; excess requests get `429` with `Retry-After`. Keyed by peer address, or by `X-Forwarded-For` when `ROSEGOLD_TRUST_PROXY=1`. |
-| `ROSEGOLD_TRUST_PROXY` | `bool` | `0` | Trust `X-Forwarded-For` for rate-limit client identity. Only set behind a proxy that overwrites the header (Cloud Run does). |
-| `ROSEGOLD_BACKEND_RETRY_SECONDS` | `float` | `60` | Cooldown before a failed LLM backend load is retried on the next request. |
-| `ROSEGOLD_LOG_LEVEL` | `str` | `INFO` | Python log level for the `rosegold.*` loggers. |
-| `ROSEGOLD_LOG_JSON` | `bool` | `0` | Emit one JSON object per log line (Cloud Logging / Loki friendly). |
-| `ROSEGOLD_CORS_ORIGINS` | `str` | `null` | Comma-separated browser origins allowed to call the API. Unset = no cross-origin access (the dashboard talks to the API server-side, so it does not need this). |
-| `ROSEGOLD_MAX_BODY_BYTES` | `int` | `8388608` | Hard cap on any request body; larger requests get `413` before parsing. |
-| `ROSEGOLD_MAX_NOTES_CHARS` | `int` | `400000` | Maximum `notes_formatted_text` length accepted by `/api/adjudicate/single`. |
-| `ROSEGOLD_MAX_CRITERIA_CHARS` | `int` | `20000` | Maximum custom criteria length (request field and saved rule text). |
-| `ROSEGOLD_MAX_BATCH_VISITS` | `int` | `500` | Maximum visits per `/api/adjudicate/batch` call. |
-| `ROSEGOLD_TRUST_REMOTE_CODE` | `bool` | `0` | Pass `trust_remote_code=True` to vLLM. Off by default; Llama and Gemma do not need it. |
-| `ROSEGOLD_LLAMA_URL` | `str` | HF resolve URL | Override GGUF download URL. Must be `https://`. |
-| `ROSEGOLD_LLAMA_SHA256` | `str` | `null` | Pin the GGUF digest. Mismatched downloads or cached files are discarded. |
-| `ROSEGOLD_DOWNLOAD_TIMEOUT` | `float` | `120` | Socket timeout (seconds) for weight downloads. |
-| `ROSEGOLD_API_CONCURRENCY` | `int` | `64` | uvicorn `--limit-concurrency` used by the start scripts. |
-| `ROSEGOLD_LLAMA_THREADS` | `int` | all usable CPUs | llama.cpp thread count. Default is the smaller of the affinity mask and the cgroup CPU quota, so a 4-vCPU Cloud Run instance gets 4 threads even when the host reports more cores. |
-
----
-
-## OMOP CDM Data Contract & Ingestion
-
-Rose Gold expects standardized Observational Medical Outcomes Partnership (OMOP) Common Data Model tables. Both **CSV** and **Parquet** (`.parquet`) formats are supported.
-
-### Required Table Schemas
-
-#### 1. `NOTE` Table (`--notes_path`)
-| Column Name | Required | Type | Description |
-| :--- | :---: | :--- | :--- |
-| `visit_occurrence_id` | **Yes** | Integer | Foreign key linking the note to a specific encounter. |
-| `note_text` | **Yes** | String | Verbatim clinical note content (nursing, progress, consult, discharge). |
-| `note_date` or `note_datetime` | **Yes** | Date / Timestamp | Timestamp used for chronological sorting within an encounter. |
-| `note_id` | Optional | Integer / String | Unique note identifier preserved in evidence provenance quotes. |
-| `note_title` / `note_type_concept_id` | Optional | String / Integer | Note category (e.g., "Discharge Summary", "Nursing Note"). |
-
-#### 2. `VISIT_OCCURRENCE` Table (`--visits_path`)
-| Column Name | Required | Type | Description |
-| :--- | :---: | :--- | :--- |
-| `visit_occurrence_id` | **Yes** | Integer | Unique identifier for the hospital encounter. |
-| `person_id` | **Yes** | Integer | Unique patient identifier. |
-| `visit_start_date` | Optional | Date / String | Admission timestamp. |
-| `visit_end_date` | Optional | Date / String | Discharge timestamp. |
-
-> [!NOTE]
-> If using raw **MIMIC-III-Ext-Notes** (`notes.csv`), the loader automatically identifies the schema (`hadm_id`, `chartdate`, `text`) and derives encounters without requiring a separate `visits.csv` file.
-
----
-
-## Quick Start Guide
-
-### Local Installation (Python 3.11+)
-
-This is the default path for sites that cannot run Docker. No container runtime is required.
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/rosegold.git
-cd rosegold
-
-# 2. Install dependencies
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-# 3. Optional: point at a site-approved Bedrock Mantle model (see configs/site.env.example)
-export ROSEGOLD_LLM_BACKEND=mantle
-export AWS_REGION=us-west-2
-export AWS_BEARER_TOKEN_BEDROCK=...
-export ROSEGOLD_OPENAI_MODEL=YOUR-APPROVED-MANTLE-MODEL
-
-# 4. Launch full stack (FastAPI on :8000, Streamlit on :8501)
 ./start_services.sh
 ```
 
-- **Interactive Dashboard**: [http://localhost:8501](http://localhost:8501)
-- **Interactive Swagger API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+**Key Portal Features:**
+- **Queue Filter & One-Click Navigation**: Filter encounters by `All Encounters`, `Unreviewed Only`, `Adjudicated Positive`, or `Adjudicated Negative`, and step through visits with **⬅️ Prev** and **Next ➡️** buttons.
+- **Inline Evidence & Keyword Highlighting**: Automatically highlights verbatim LLM evidence quotes (in gold) and search keywords (in blue) directly inside the chronological patient note cards.
+- **Built-in & Custom Phenotypes**: Choose from Sepsis, Acute Ischemic Stroke, ARDS, AKI, or select **`Custom Phenotype...`** to adjudicate any clinical condition (e.g., *Pulmonary Embolism*, *Decompensated Heart Failure*) with custom consensus criteria.
+- **Physician Verification & Concordance Matrix**: Sign off or override LLM labels to compute live **Cohen's $\kappa$**, sensitivity, specificity, PPV, NPV, and exportable calibration audit logs.
 
 ---
 
-## CLI Batch Adjudication Manual
+### 2. CLI Batch Adjudication (`app.adjudicator`)
 
-The batch adjudication CLI (`app.adjudicator`) provides robust offline processing for cohorts of thousands of visits with automatic JSONL checkpoint resumption.
+Process thousands of visits offline with **automatic JSONL checkpoint resumption** (if interrupted, re-running the same command skips already-completed `visit_occurrence_id`s):
 
 ```bash
-python -m app.adjudicator [OPTIONS]
+python -m app.adjudicator \
+  --notes_path data/synthetic_notes.csv \
+  --visits_path data/synthetic_visits.csv \
+  --output_path outputs/rose_gold_adjudications.csv \
+  --target_condition "Sepsis / Septic Shock" \
+  --chunk_size 50
 ```
 
-### CLI Options Reference
-
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--notes_path` | `str` | `data/synthetic_notes.csv` | Path to OMOP `NOTE` table or MIMIC `notes.csv`. |
-| `--visits_path` | `str` | `data/synthetic_visits.csv` | Path to OMOP `VISIT_OCCURRENCE` table. |
-| `--output_path` | `str` | `outputs/rose_gold_adjudications.csv` | Destination path for output labels. |
-| `--target_condition` | `str` | `Sepsis / Septic Shock` | Clinical condition to phenotype. |
-| `--model_name` | `str` | `meta-llama/Llama-3.1-8B-Instruct` | Hugging Face model identifier or local path. |
-| `--tensor_parallel_size` | `int` | `1` | Number of GPUs to shard the model across (TP). |
-| `--quantization` | `str` | `None` | Quantization scheme (`fp8`, `awq`, `bitsandbytes`). |
-| `--max_model_len` | `int` | `32768` | Maximum context window length in tokens. |
-
-### Automatic Checkpoint Resumption
-If an adjudication run is interrupted, re-running the same command will inspect `<output_path>.jsonl`, detect all completed `visit_occurrence_id`s, and resume processing only the remaining pending visits without re-running earlier encounters.
-
-### Generated Output Files
-A single batch run automatically writes:
-1. `outputs/rose_gold_adjudications.csv` — Full tabular output with status, confidence, and rationale.
-2. `outputs/rose_gold_adjudications.parquet` — High-speed columnar format for downstream analytics.
-3. `outputs/rose_gold_adjudications.jsonl` — Checkpoint file with raw JSON payload per visit.
-4. `outputs/omop_observation_adjudications.csv` — Native OMOP CDM v5.4 `OBSERVATION` table.
+**Generated Outputs:**
+| File | Format | Description |
+| :--- | :--- | :--- |
+| `outputs/rose_gold_adjudications.csv` | CSV | Tabular adjudications (`phenotype_status`, `confidence_score`, `clinical_rationale`). |
+| `outputs/rose_gold_adjudications.parquet` | Parquet | Columnar file for analytics pipelines. |
+| `outputs/rose_gold_adjudications.jsonl` | JSONL | Full nested payload including `key_evidence` quotes (used for checkpoint resumption). |
+| `outputs/omop_observation_adjudications.csv` | OMOP CSV | Standard OMOP CDM v5.4 `OBSERVATION` table mapped to SNOMED-CT concepts. |
 
 ---
 
-## REST API Reference & Client Examples
+### 3. FastAPI REST Service (`:8000`)
 
-The FastAPI backend exposes endpoints for real-time single-visit phenotyping, batch jobs, and physician audit logging.
+#### Health & Readiness Probes
+- `GET /health` — Liveness probe (`200 OK` when process is up; summarizes active backend).
+- `GET /ready` — Readiness probe (`200 OK` only when the configured LLM backend is ready to serve; `503` with `Retry-After` while loading).
 
-### 1. Health & Readiness (`GET /health`, `GET /ready`)
-`/health` is a liveness probe: it answers `200` whenever the process is up and summarises the backend. `/ready` is a readiness probe: it answers `200` only when adjudication calls would succeed right now, and `503` (with `Retry-After`) while a required LLM backend is still loading or failed to load. Point Cloud Run startup probes / Kubernetes `readinessProbe` at `/ready`.
-```bash
-curl -s http://127.0.0.1:8000/health | jq
-```
-```json
-{
-  "status": "healthy",
-  "ready": true,
-  "engine_ready": true,
-  "backend_initializing": false,
-  "vllm_active": true,
-  "backend": "vllm",
-  "llm_real": true,
-  "model_name": "meta-llama/Llama-3.1-8B-Instruct",
-  "device": "cuda",
-  "auth_required": true,
-  "storage": { "durable": true }
-}
-```
-When `ROSEGOLD_API_KEY` is set, `notes_file`, `visits_file`, the full `storage` block and `error` are only returned to callers that present the key. Every response carries an `X-Request-ID` header (echoed from the request when well-formed); quote it when reading logs.
-
-### 2. Adjudicate Single Visit (`POST /api/adjudicate/single`)
-Adjudicate by encounter ID or direct raw note text:
-
+#### Single-Visit Adjudication (`POST /api/adjudicate/single`)
 ```bash
 curl -X POST http://127.0.0.1:8000/api/adjudicate/single \
   -H "Content-Type: application/json" \
   -d '{
-    "visit_occurrence_id": 40001,
+    "visit_occurrence_id": 20001,
     "target_condition": "Sepsis / Septic Shock"
   }'
 ```
 
-#### Python Client Example:
+#### Ad-Hoc Note Text Adjudication (Python)
 ```python
 import requests
 
-url = "http://127.0.0.1:8000/api/adjudicate/single"
-payload = {
-    "person_id": 1001,
-    "notes_formatted_text": (
-        "Patient admitted to ICU with severe hypoxemic respiratory failure. "
-        "Intubated on mechanical ventilation, PaO2/FiO2 ratio 135. "
-        "Chest radiograph confirms diffuse bilateral infiltrates. Echocardiogram normal EF."
-    ),
-    "target_condition": "Acute Respiratory Distress Syndrome (ARDS)"
-}
-
-response = requests.post(url, json=payload)
-result = response.json()
-
-print("Phenotype Status:", result["phenotype_status"])
-print("Confidence:", result["confidence_score"])
-print("Primary Criteria Met:", result["primary_criteria_met"])
-print("Key Evidence Quotes:", result["key_evidence"])
-print("Clinical Rationale:", result["clinical_rationale"])
-```
-
-### 3. Record Physician Review Feedback (`POST /api/feedback`)
-Log clinician agreement, overrides, and audit trails:
-```bash
-curl -X POST http://127.0.0.1:8000/api/feedback \
-  -H "Content-Type: application/json" \
-  -d '{
-    "visit_occurrence_id": 40001,
-    "person_id": 1001,
-    "reviewer_id": "dr_smith",
-    "adjudication_status": "CONFIRMED_POSITIVE",
-    "reviewer_agreement": true,
-    "comments": "Agreed with Sepsis-3 criteria; lactate 3.4 and vasopressor requirement."
-  }'
+resp = requests.post(
+    "http://127.0.0.1:8000/api/adjudicate/single",
+    json={
+        "person_id": 1001,
+        "target_condition": "Pulmonary Embolism",
+        "clinical_criteria": "1. CTA chest filling defect\n2. Acute pulmonary embolism",
+        "notes_formatted_text": (
+            "[Note 1 | Date: 2026-03-01] CTA chest demonstrates acute segmental "
+            "pulmonary embolism in the right lower lobe. Started on heparin."
+        ),
+    },
+)
+print(resp.json())
 ```
 
 ---
 
-## Interactive Web Dashboard (Streamlit)
+## 🚀 Deployment Topologies (Docker, Singularity/HPC, Cloud Run, Air-Gapped)
 
-Launch the interactive clinician review dashboard:
-```bash
-./start_services.sh
-# Or standalone:
-streamlit run app/ui.py --server.port 8501
-```
+### A. Rootless Docker & Podman (Hospital Servers)
 
-### Dashboard Capabilities:
-1. **Interactive Encounter Browser**: Explore patient visits, view chronological note trajectories, inspect note headers, and trigger on-demand single-encounter adjudication.
-2. **Evidence Highlighter & Provenance Cards**: Directly links model decisions to verbatim note excerpts, with Note ID, date, and clinical interpretation.
-3. **Physician-in-the-Loop Feedback**: Clinicians can validate or override model decisions with a single click, recording structured rationales in durable audit logs.
-4. **Cohort Batch Adjudicator**: Run batch phenotyping across entire cohorts with live progress tracking, status distribution charts, and instant export buttons.
-5. **Concordance & Reliability Metrics**: Automatically computes Cohen's $\kappa$, sensitivity, specificity, positive predictive value (PPV), and negative predictive value (NPV) against physician labels.
-6. **Phenotype Criteria Editor**: Dynamically modify or expand diagnostic criteria guidelines in real-time.
-
----
-
-## Deployment Topologies
-
-### A. Rootless Docker & Rootless Podman (Hospital Firewalls)
-
-Rootless execution allows deploying containers without `root` or `sudo` privileges, complying with strict hospital IT policies.
+Runs as an unprivileged user (`uid 1000`) with `Llama-3.2-3B-Instruct-Q4_K_M.gguf` baked into the image:
 
 ```bash
-# 1. Setup Rootless Docker
-systemctl --user start docker
-export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
-
-# 2. Build and run CPU container on unprivileged port 8080
 mkdir -p outputs
 docker build -f Dockerfile.cpu -t rosegold:cpu .
 
@@ -527,116 +445,39 @@ docker run -d \
   rosegold:cpu
 ```
 
-#### Rootless Podman (Red Hat / Rocky / Fedora):
+<details>
+<summary><b>Click to expand: Rootless Podman & Multi-GPU Docker Compose</b></summary>
+
 ```bash
-mkdir -p outputs
+# Rootless Podman (RHEL / Rocky / Fedora)
 podman build -f Dockerfile.cpu -t rosegold:cpu .
-podman run -d \
-  --name rosegold \
-  -p 8080:8080 \
+podman run -d --name rosegold -p 8080:8080 \
   -v ./data:/workspace/data:ro,Z \
   -v ./outputs:/workspace/outputs:rw,Z \
   rosegold:cpu
-```
 
----
-
-### B. Multi-GPU Server (Docker Compose + Tensor Parallelism)
-
-For high-volume production deployments with local NVIDIA GPUs:
-
-```bash
-# Ensure NVIDIA Container Toolkit is installed
-# Set your Hugging Face token in your environment
-export HF_TOKEN="your_hf_token"
-
-# Launch multi-container stack (vLLM backend + Streamlit)
+# Multi-GPU Docker Compose (vLLM + Streamlit)
+export HF_TOKEN="hf_..."
 docker compose up --build -d
 ```
-
-To configure GPU sharding across 4 GPUs, adjust `command` in `docker-compose.yml` or set `tensor_parallel_size: 4` in `configs/config.yaml`.
+</details>
 
 ---
 
-### C. Google Cloud Run (Serverless CPU + GCS Storage)
+### B. Singularity / Apptainer (HPC & Slurm Clusters — GPU & CPU)
 
-Deploy Rose Gold as an auto-scaling serverless service on Google Cloud Run with persistent Cloud Storage mounts:
+Singularity/Apptainer is ideal for university and hospital HPC clusters where Docker is prohibited. It runs rootless as a single immutable `.sif` file.
 
+#### 1. Build the `.sif` Image
 ```bash
-# 1. Authenticate with GCP
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-
-# 2. Execute automated deploy script
-./deploy_to_gcp.sh
-```
-
-What `deploy_to_gcp.sh` automates:
-- Refuses to deploy an uncommitted working tree (override with `ALLOW_DIRTY=1`).
-- Runs pre-flight test gates (`pytest tests/`).
-- Builds `Dockerfile.cpu` via Google Cloud Build with the Llama GGUF baked into the image (sha256-verified at build time), and tags the image with the git SHA (plus `:latest`); the SHA tag is what gets deployed, so every revision maps to a commit and can be rolled back exactly. Cold starts load weights from the image filesystem instead of copying 2 GB out of the GCS mount.
-- Provisions a dedicated Cloud Storage bucket (`gs://${PROJECT_ID}-rosegold-data`) with public-access prevention.
-- Creates a least-privilege runtime service account (`rosegold-runtime@…`) with only `storage.objectAdmin` on that bucket (plus `aiplatform.user` only when `LLM_BACKEND=vertex`), instead of the default compute service account.
-- Mounts GCS to Cloud Run at `/mnt/gcs` (owned by the container's unprivileged uid) for persistent physician audit logs and batch outputs.
-- Deploys Cloud Run with 4 vCPUs, 8GB RAM, startup CPU boost, and request-based billing (CPU is charged only while a request or the dashboard websocket is in flight; `ALWAYS_ON_CPU=1` switches back to instance-based billing so the model preloads before the first request).
-- Performs automated smoke tests against the Streamlit health endpoint.
-
-Useful knobs: `REQUIRE_AUTH=1` deploys with `--no-allow-unauthenticated` (IAM-gated UI), `ROSEGOLD_API_KEY=…` and `ROSEGOLD_LLAMA_SHA256=…` are passed through to the service, `DEPLOY_YES=1` skips the prompt.
-
----
-
-### D. Air-Gapped Hospital On-Premises (100% Offline & HIPAA Compliant)
-
-For air-gapped hospital environments without outbound internet access:
-
-1. **Pre-cache GGUF or Hugging Face weights** on an internet-connected staging machine:
-   ```bash
-   huggingface-cli download bartowski/Llama-3.2-3B-Instruct-GGUF Llama-3.2-3B-Instruct-Q4_K_M.gguf --local-dir ./models
-   ```
-2. **Transfer `./models` and `./data` to the air-gapped server**.
-3. **Run with zero outbound network calls**:
-   ```bash
-   export ROSEGOLD_LLM_BACKEND="llamacpp"
-   export ROSEGOLD_MODEL_DIR="/opt/rosegold/models"
-   export ROSEGOLD_LLAMA_GGUF="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-   export HF_HUB_OFFLINE=1
-
-   ./start_services.sh
-   ```
-
----
-
-### E. Singularity & Apptainer (HPC clusters)
-
-[Singularity / Apptainer](https://apptainer.org/) is the standard container runtime on HPC clusters where Docker is prohibited due to root security concerns.
-
-Key benefits for clinical AI:
-- **Zero Daemon & Strictly Non-Root**: Inherits your unprivileged host credentials without privilege escalation.
-- **Single Flat File (`.sif`)**: Entire container encapsulates into an immutable file (`rosegold.sif`), easily archived for IRB/HIPAA compliance.
-- **Native GPU Passthrough**: Single `--nv` flag automatically exposes host NVIDIA drivers.
-- **Slurm & PBS Integration**: Directly executable within batch scheduling job scripts.
-
-#### 1. Build the Singularity Image (`.sif`)
-
-You can build `.sif` images either from the pre-built Docker containers or from the included definition files in [`singularity/`](singularity/):
-
-```bash
-# Option A: Convert from local Docker daemon
-singularity build rosegold_gpu.sif docker-daemon://rosegold:latest
-singularity build rosegold_cpu.sif docker-daemon://rosegold:cpu
-
-# Option B: Build from definition files (on a machine with root/fakeroot)
+# Build GPU image (vLLM + PyTorch CUDA)
 singularity build rosegold_gpu.sif singularity/rosegold.def
+
+# Build CPU image (llama.cpp GGUF + rules)
 singularity build rosegold_cpu.sif singularity/rosegold_cpu.def
 ```
 
----
-
-#### 2. Running WITH GPU (NVIDIA Acceleration via `--nv`)
-
-Pass the `--nv` flag to bind host CUDA drivers into the container.
-
-##### Interactive / CLI Execution:
+#### 2. Run WITH GPU (`--nv`)
 ```bash
 singularity exec --nv \
   --bind ./data:/workspace/data \
@@ -646,46 +487,10 @@ singularity exec --nv \
     --visits_path /workspace/data/synthetic_visits.csv \
     --output_path /workspace/outputs/hpc_gpu_results.csv \
     --model_name "meta-llama/Llama-3.1-8B-Instruct" \
-    --tensor_parallel_size 1 \
     --target_condition "Sepsis / Septic Shock"
 ```
 
-##### Slurm GPU Job Script (`submit_gpu.slurm`):
-```bash
-#!/bin/bash
-#SBATCH --job-name=rosegold_gpu
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:a100:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=02:00:00
-#SBATCH --output=outputs/slurm_gpu_%j.log
-
-module load apptainer  # or module load singularity
-
-export ROSEGOLD_LLM_BACKEND="vllm"
-export HF_TOKEN="your_hf_token"
-
-singularity exec --nv \
-  --bind $PWD:/workspace \
-  rosegold_gpu.sif python -m app.adjudicator \
-    --notes_path /workspace/data/synthetic_notes.csv \
-    --visits_path /workspace/data/synthetic_visits.csv \
-    --output_path /workspace/outputs/slurm_gpu_results.csv \
-    --target_condition "Sepsis / Septic Shock"
-```
-Submit with:
-```bash
-sbatch submit_gpu.slurm
-```
-
----
-
-#### 3. Running WITHOUT GPU (CPU-Only HPC Nodes)
-
-On standard CPU compute nodes without GPU accelerators, omit `--nv` and use the CPU image (`rosegold_cpu.sif`) with `ROSEGOLD_LLM_BACKEND="llamacpp"` (4-bit quantized GGUF) or `ROSEGOLD_LLM_BACKEND="keyword_rules"`.
-
-##### Interactive / CLI Execution:
+#### 3. Run WITHOUT GPU (CPU Compute Nodes)
 ```bash
 singularity exec \
   --bind ./data:/workspace/data \
@@ -699,7 +504,33 @@ singularity exec \
     --target_condition "Acute Ischemic Stroke"
 ```
 
-##### Slurm CPU Job Script (`submit_cpu.slurm`):
+<details>
+<summary><b>Click to expand: Ready-to-Use Slurm Batch Scripts (GPU & CPU)</b></summary>
+
+**Slurm GPU Job (`submit_gpu.slurm`):**
+```bash
+#!/bin/bash
+#SBATCH --job-name=rosegold_gpu
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=02:00:00
+#SBATCH --output=outputs/slurm_gpu_%j.log
+
+module load apptainer
+export ROSEGOLD_LLM_BACKEND="vllm"
+export HF_TOKEN="your_hf_token"
+
+singularity exec --nv --bind $PWD:/workspace rosegold_gpu.sif \
+  python -m app.adjudicator \
+    --notes_path /workspace/data/synthetic_notes.csv \
+    --visits_path /workspace/data/synthetic_visits.csv \
+    --output_path /workspace/outputs/slurm_gpu_results.csv \
+    --target_condition "Sepsis / Septic Shock"
+```
+
+**Slurm CPU Job (`submit_cpu.slurm`):**
 ```bash
 #!/bin/bash
 #SBATCH --job-name=rosegold_cpu
@@ -709,202 +540,137 @@ singularity exec \
 #SBATCH --time=04:00:00
 #SBATCH --output=outputs/slurm_cpu_%j.log
 
-module load apptainer  # or module load singularity
-
+module load apptainer
 export ROSEGOLD_LLM_BACKEND="llamacpp"
-export ROSEGOLD_LLAMA_REPO="bartowski/Llama-3.2-3B-Instruct-GGUF"
-export ROSEGOLD_LLAMA_GGUF="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 
-singularity exec \
-  --bind $PWD:/workspace \
-  rosegold_cpu.sif python -m app.adjudicator \
+singularity exec --bind $PWD:/workspace rosegold_cpu.sif \
+  python -m app.adjudicator \
     --notes_path /workspace/data/synthetic_notes.csv \
     --visits_path /workspace/data/synthetic_visits.csv \
     --output_path /workspace/outputs/slurm_cpu_results.csv \
     --target_condition "Acute Ischemic Stroke"
 ```
-Submit with:
+</details>
+
+---
+
+### C. Google Cloud Run (Serverless CPU + Persistent GCS)
+
+Deploy with one command using [`deploy_to_gcp.sh`](deploy_to_gcp.sh):
 ```bash
-sbatch submit_cpu.slurm
+gcloud auth login
+PROJECT_ID="your-gcp-project-id" DEPLOY_YES=1 ./deploy_to_gcp.sh
 ```
+- Runs pre-flight `pytest` gates and verifies a clean git working tree.
+- Builds `Dockerfile.cpu` with `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (`sha256`-verified) baked into the image layer for fast cold starts.
+- Provisions a private GCS bucket (`gs://<PROJECT_ID>-rosegold-data`) and a least-privilege service account (`rosegold-runtime@…`), mounted at `/mnt/gcs` for durable audit logs and batch exports.
 
 ---
 
-#### 4. Running the Web UI & API Service in Singularity
+### D. Air-Gapped Hospital Server (100% Offline)
 
-Launch the full-stack Streamlit dashboard and FastAPI service inside an interactive allocation or compute node:
-```bash
-# GPU mode:
-singularity run --nv --bind $PWD:/workspace rosegold_gpu.sif
-
-# CPU mode:
-singularity run --bind $PWD:/workspace rosegold_cpu.sif
-```
-Access the dashboard at `http://localhost:8501` (or via SSH port forwarding: `ssh -L 8501:localhost:8501 user@cluster`).
-
----
-
-### F. Native Python, No Container (Hospital BYO-LLM)
-
-Sites that **do not permit Docker** do not need Singularity either. Singularity is only an optional HPC packaging path.
-
-1. Python 3.11+ venv on a host that can reach the site-approved Bedrock or Databricks endpoint.
-2. `pip install -r requirements.txt` (add `requirements-bedrock.txt` only if IT requires native Bedrock Converse).
-3. Point Rose Gold at Bedrock Mantle — see [Hospital-Approved Hosted LLMs](#5-hospital-approved-hosted-llms-bedrock-mantle--databricks) and [`configs/site.env.example`](configs/site.env.example).
-4. Run the CLI or `./start_services.sh`. No container runtime, no local GPU weights, no outbound call except to Mantle.
-
-PHI stays inside the approved Bedrock account. Rose Gold does not substitute a different model.
+1. On a staging machine with internet access, download the GGUF model:
+   ```bash
+   huggingface-cli download bartowski/Llama-3.2-3B-Instruct-GGUF \
+     Llama-3.2-3B-Instruct-Q4_K_M.gguf --local-dir ./models
+   ```
+2. Copy `./models` to the air-gapped server and run with zero network calls:
+   ```bash
+   export ROSEGOLD_LLM_BACKEND="llamacpp"
+   export ROSEGOLD_MODEL_DIR="/opt/rosegold/models"
+   export ROSEGOLD_LLAMA_GGUF="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+   export HF_HUB_OFFLINE=1
+   ./start_services.sh
+   ```
 
 ---
 
-## Security & Hardening
+## 📋 OMOP CDM Data Contract & Custom Phenotypes
 
-Rose Gold handles clinical narrative, so the service is built to fail closed. What is in place:
+### 1. Required Input Tables (`.csv` or `.parquet`)
 
-**API boundary (`app/api.py`, `app/paths.py`)**
-- Request bodies are capped (`ROSEGOLD_MAX_BODY_BYTES`) by a pure-ASGI middleware that checks `Content-Length` and also counts streamed chunks, so a chunked upload cannot bypass the limit.
-- Every free-text field has an explicit length bound; visit-ID lists are bounded; confidence values must be in `[0, 1]`; blank conditions are rejected with `422`.
-- Caller-supplied dataset paths (`notes_path` / `visits_path`) go through one shared guard (`app/paths.py`) used by **both** the API and the Streamlit sidebar: the path must resolve, symlinks included, to a regular `.csv`/`.parquet` file strictly inside `ROSEGOLD_DATA_DIR`. Traversal, prefix collisions (`data_evil/…`), directories, other extensions and symlink escapes are rejected (`400` from the API; an inline error in the dashboard) rather than silently substituting the default dataset or reading an arbitrary file.
-- Every response carries `X-Request-ID` (a well-formed inbound id is echoed, anything else is replaced). Unexpected exceptions are logged under that id and returned as a generic `500` whose `error_id` is the same value. Backend-unavailable conditions return a generic `503` with `Retry-After`; the underlying error text (which can contain URLs or paths) goes to the log only.
-- Optional shared-secret auth: set `ROSEGOLD_API_KEY` and every `/api/*` route requires `X-API-Key` (or `Authorization: Bearer`), compared in constant time. `/health` stays open for probes but, once a key is configured, hides file paths, storage layout and backend error text from unauthenticated callers.
-- Optional per-client rate limiting on `/api/*` (`ROSEGOLD_RATE_LIMIT_PER_MIN`, `429` + `Retry-After`). `X-Forwarded-For` is only trusted with `ROSEGOLD_TRUST_PROXY=1`.
-- CORS is closed unless `ROSEGOLD_CORS_ORIGINS` is set, and credentials are never combined with a wildcard origin.
-- Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, and — on JSON routes — `Cache-Control: no-store` plus `Content-Security-Policy: default-src 'none'`.
-- `/ready` is a real readiness probe: `503` while a required LLM backend is loading or failed, `200` only when adjudication calls would succeed.
+| Table | Column | Required | Description |
+| :--- | :--- | :---: | :--- |
+| **`NOTE`** (`--notes_path`) | `visit_occurrence_id` | **Yes** | Encounter foreign key. |
+| | `note_text` | **Yes** | Clinical note text (nursing, progress, radiology, discharge). |
+| | `note_date` / `note_datetime` | **Yes** | Timestamp used to sort notes chronologically. |
+| | `note_id` | Optional | Unique note ID preserved in `key_evidence` citations. |
+| **`VISIT_OCCURRENCE`** (`--visits_path`) | `visit_occurrence_id` | **Yes** | Unique encounter ID. |
+| | `person_id` | **Yes** | Patient identifier (missing/NaN defaults safely to `0`). |
+| | `visit_start_date`, `visit_end_date` | Optional | Encounter admission and discharge dates. |
 
-**Inference engine (`app/engine.py`, `app/hybrid_engine.py`, `app/vertex_engine.py`, `app/openai_compat_engine.py`, `app/bedrock_engine.py`, `app/prompts.py`)**
-- Backend initialization is guarded by a lock so concurrent first requests wait for a single load; `/health` exposes `backend_initializing`. A failed load is retried after `ROSEGOLD_BACKEND_RETRY_SECONDS` (default 60 s) on the next request, so a transient cold-start failure does not pin the instance in a degraded state until someone restarts it.
-- When `ROSEGOLD_LLM_BACKEND` names a real backend (`llamacpp`, `vertex`, `hybrid`, `mantle`, `bedrock`, `databricks`, `openai`) and it is unavailable, requests fail with `503`. Keyword-rule labels are never substituted for LLM output unless `ROSEGOLD_ALLOW_MOCK=1` is set explicitly. The dashboard follows the same rule: an API error is shown, not papered over with an in-process engine.
-- Hosted backends (`mantle`, `bedrock`, `databricks`, `openai`) have **no default model**. Mantle builds `https://bedrock-mantle.{region}.api.aws/v1` and requires a Bedrock API key. One failed visit is labelled `INDETERMINATE` and does not abort the batch. An explicit hosted/remote backend never loads local vLLM or GGUF weights.
-- The hybrid engine has **no default endpoint**. `ROSEGOLD_MUSE_URL` must be set and must be `https://` (loopback or `ROSEGOLD_MUSE_ALLOW_HTTP=1` excepted). `ROSEGOLD_MUSE_API_KEY` is sent as a bearer token. If the LLM call fails, the record is tagged `inference_backend: hybrid:rules_only(<reason>)` with reduced confidence and a rationale note instead of claiming a verification that never ran.
-- Vertex failures are isolated per visit (an `INDETERMINATE` record with the error class) instead of aborting the batch.
-- llama.cpp / vLLM / HF generation is serialized behind an inference lock (those handles are not safe for concurrent `generate()` calls from uvicorn's threadpool).
-- vLLM `trust_remote_code` is **off** by default (`ROSEGOLD_TRUST_REMOTE_CODE=1` to opt in for a reviewed repo).
-- The system prompt states that notes and criteria are data, not instructions, and the output is schema-constrained, which limits prompt-injection impact to the rationale text.
-- The old CLI demo path that emitted fabricated "verbatim" evidence quotes has been removed; every evidence quote now comes from the rules extractor or a model reading the actual notes.
+> [!TIP]
+> **Raw PhysioNet MIMIC-III-Ext-Notes Support**: If you pass a raw `MIMIC-III-Ext-Notes` `notes.csv` (`hadm_id`, `chartdate`, `text`), Rose Gold automatically detects the format and derives visits without requiring a separate `visits.csv`.
 
-**Model weights (`app/model_store.py`)**
-- Downloads are `https://` only, streamed with a socket timeout to a `.part` file, then renamed atomically. Partial or undersized files are deleted.
-- `ROSEGOLD_LLAMA_SHA256` pins the digest; mismatching downloads and cached copies are discarded.
-- `ROSEGOLD_LLAMA_GGUF` is reduced to a bare filename so the env cannot smuggle directory components.
+### 2. Built-In & Custom Phenotypes
 
-**Storage (`app/storage.py`, `app/omop_loader.py`)**
-- Whole-file exports (CSV, Parquet, JSONL, OMOP OBSERVATION, saved criteria) are written to a sibling temp file, `fsync`ed and `os.replace`d, so a crash mid-write leaves the previous good file rather than a truncated one. Writers are serialized so concurrent audit appends cannot interleave.
-- Audit and batch JSONL readers skip blank or corrupt lines instead of taking the whole log offline.
-- Loader caches are lock-protected and a `NULL` `person_id` yields `0` instead of a `500`.
+Rose Gold ships with 4 consensus phenotypes in [`configs/config.yaml`](configs/config.yaml) mapped to OMOP CDM v5.4 SNOMED-CT concepts:
+- **Sepsis / Septic Shock** (Sepsis-3): Concept `132797` (`SNOMED 91302008`)
+- **Acute Ischemic Stroke**: Concept `443454` (`SNOMED 422504002`)
+- **Acute Respiratory Distress Syndrome (ARDS)** (Berlin): Concept `4195694` (`SNOMED 67782005`)
+- **Acute Kidney Injury (AKI)** (KDIGO): Concept `197320` (`SNOMED 14669001`)
 
-**Dashboard (`app/ui.py`)**
-- Streamlit runs with `client.showErrorDetails=none` and `toolbarMode=minimal` (requires Streamlit ≥ 1.41), so tracebacks and file paths stay in the server log. API failures are shown as short messages with the request id.
-
-**Containers and deployment**
-- `Dockerfile.cpu` runs as an unprivileged user (uid 1000) and copies only the bundled synthetic cohort. Credentialed extracts under `data/mimic-iii-ext-notes*` never enter the image even when present locally; the Singularity definitions and the GPU `Dockerfile` follow the same rule. `.dockerignore` and `.gcloudignore` exclude them as a second layer. Both Dockerfiles declare a `HEALTHCHECK`; the GPU image takes a `VLLM_TAG` build arg so the base can be pinned.
-- `requirements.txt` carries upper bounds so a fresh build cannot pull an unreviewed major release.
-- `docker-compose.yml` binds ports to `127.0.0.1` by default, mounts `./data` read-only, and passes `ROSEGOLD_API_KEY` through.
-- The start scripts supervise both processes: if uvicorn or Streamlit exits, the container exits so the platform restarts it. uvicorn runs with `--no-server-header` and a concurrency limit.
-- Cloud Run deploys run as a dedicated least-privilege service account, use an immutable git-SHA image tag, refuse to ship an uncommitted tree, refuse a `hybrid` backend without an `https://` Muse URL, and can mount the API key from Secret Manager (`ROSEGOLD_API_KEY_SECRET=<name>`) instead of a plain env var. See [Deployment Topologies](#c-google-cloud-run-serverless-cpu--gcs-storage).
-- `.github/workflows/ci.yml` runs the suite on Python 3.11/3.12, syntax-checks the shell entrypoints, fails if a Dockerfile copies all of `data/` or if a hardcoded IP endpoint appears under `app/`, and runs `pip-audit` (advisory).
-
-Regression coverage lives in `tests/test_security_hardening.py` and `tests/test_production_hardening.py`.
-
-**Out of scope / still your responsibility:** the public Cloud Run URL is unauthenticated by default (`REQUIRE_AUTH=1` flips it), the rate limiter is per-process and in-memory (fine for one worker, not a substitute for an edge WAF), and the bundled Streamlit dashboard has no user login. Do not put PHI behind the default public deployment.
+To adjudicate **any custom phenotype** (e.g., *Pulmonary Embolism*, *Decompensated Heart Failure*), select `Custom Phenotype...` in the Web Portal, pass `--target_condition` and `--clinical_criteria` on the CLI, or add an entry to `configs/config.yaml`.
 
 ---
 
-## Phenotypes & Custom Criteria
+## ⚙️ Environment Variables Reference
 
-Rose Gold includes pre-configured clinical consensus criteria in [`configs/config.yaml`](configs/config.yaml):
+<details>
+<summary><b>Click to expand full Environment Variables Table</b></summary>
 
-1. **Sepsis / Septic Shock** (Sepsis-3 Consensus Definitions): Suspected/documented infection with acute organ dysfunction (SOFA $\ge 2$, lactate $> 2.0$, hypotension requiring vasopressors).
-2. **Acute Ischemic Stroke**: Sudden focal neurological deficits confirmed by neuroimaging (CT/MRI infarct or CTA vessel occlusion), ruling out mimics and hemorrhage.
-3. **Acute Respiratory Distress Syndrome (ARDS)** (Berlin Definition): Acute hypoxemic respiratory failure within 1 week of clinical insult, bilateral infiltrates on chest imaging, and PaO2/FiO2 ratio $\le 300$ not fully explained by cardiac failure.
-4. **Acute Kidney Injury (AKI)** (KDIGO Guidelines): Abrupt increase in serum creatinine by $\ge 0.3$ mg/dL within 48h, $\ge 1.5\times$ baseline within 7 days, or oliguria.
-
-### Adding Custom Phenotypes
-You can define custom phenotypes by adding entries to `configs/config.yaml`:
-```yaml
-phenotypes:
-  heart_failure:
-    target_condition: "Acute Decompensated Heart Failure"
-    criteria: |
-      1. Clinical symptoms of volume overload (dyspnea on exertion, orthopnea, peripheral edema).
-      2. Elevated cardiac biomarkers (NT-proBNP > 1000 pg/mL or BNP > 400 pg/mL).
-      3. Objective imaging evidence (pulmonary edema on CXR, reduced LVEF on echocardiogram).
-```
-Or pass custom criteria dynamically through the REST API or UI criteria manager.
-
-### Standard OMOP CDM v5.4 Export Mapping
-Adjudications are automatically mapped to standard SNOMED-CT concepts for direct ingestion into hospital OMOP databases:
-- **Sepsis**: Concept ID `132797` (SNOMED `91302008`)
-- **Acute Ischemic Stroke**: Concept ID `443454` (SNOMED `422504002`)
-- **ARDS**: Concept ID `4195694` (SNOMED `67782005`)
-- **AKI**: Concept ID `197320` (SNOMED `14669001`)
-- **NLP Derived**: Concept ID `32817` (`OMOP Concept: NLP / Algorithm Derived`)
+| Category | Variable | Default | Description |
+| :--- | :--- | :--- | :--- |
+| **Core Backend** | `ROSEGOLD_LLM_BACKEND` | `auto` | `mantle`, `bedrock`, `databricks`, `vllm`, `hybrid`, `llamacpp`, `vertex`, `openai`, or `keyword_rules`. |
+| | `ROSEGOLD_ALLOW_MOCK` | `0` | Set `1` to allow fallback to `keyword_rules` when no LLM is loaded. |
+| | `ROSEGOLD_BACKEND_RETRY_SECONDS` | `60` | Cooldown before retrying a failed backend initialization. |
+| **Hosted LLMs** | `AWS_BEARER_TOKEN_BEDROCK` | *required for `mantle`* | Bedrock API key for Mantle. |
+| | `AWS_REGION` | `us-west-2` | AWS region for `https://bedrock-mantle.{region}.api.aws/v1`. |
+| | `ROSEGOLD_OPENAI_MODEL` | *required for hosted* | Approved model ID or Databricks serving endpoint name. |
+| | `ROSEGOLD_OPENAI_BASE_URL` | derived | Explicit `https://` OpenAI-compatible base URL. |
+| | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | *required for `databricks`* | Databricks workspace host and token. |
+| **Local GPU / CPU** | `ROSEGOLD_MODEL_NAME` | `auto` | Hugging Face model ID for `vllm`. |
+| | `ROSEGOLD_LLAMA_REPO` / `ROSEGOLD_LLAMA_GGUF` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | GGUF repo and filename for `llamacpp`. |
+| | `ROSEGOLD_LLAMA_SHA256` | `null` | Optional SHA-256 pin for GGUF verification. |
+| | `ROSEGOLD_LLAMA_THREADS` | cgroup-aware | Thread count for `llama.cpp` (defaults to `min(affinity, cgroup_quota)`). |
+| **Hybrid (`Muse`)** | `ROSEGOLD_MUSE_URL` | *required for `hybrid`* | `https://` completions endpoint for Muse-Glimmer-30B. |
+| | `ROSEGOLD_MUSE_API_KEY` | `null` | Optional bearer token for the Muse endpoint. |
+| **Storage & Paths** | `ROSEGOLD_DATA_DIR` | `data` | Allowed root directory for `.csv`/`.parquet` inputs. |
+| | `ROSEGOLD_OUTPUT_DIR` | `outputs` | Directory for batch exports and audit logs. |
+| **API Security** | `ROSEGOLD_API_KEY` | `null` | Shared secret required on `/api/*` (`X-API-Key` or `Bearer`). |
+| | `ROSEGOLD_RATE_LIMIT_PER_MIN` | `0` (off) | Per-client rate limit on `/api/*` (`429` + `Retry-After`). |
+| | `ROSEGOLD_MAX_BODY_BYTES` | `8388608` | Max request payload size in bytes (`413` if exceeded). |
+</details>
 
 ---
 
-## MIMIC-III-Ext-Notes Benchmark
+## 🔒 Security & Production Hardening
 
-[MIMIC-III-Ext-Notes](https://physionet.org/content/mimic-iii-ext-notes/1.0.0/) is a credentialed 150-note nursing note evaluation cohort with 2,288 clinician-adjudicated concept labels.
+Rose Gold is designed for clinical narrative and tested against **116 automated unit, security, and production-readiness tests**:
 
-After completing PhysioNet credentialing, CITI training, and the project DUA:
+- **Self-Healing Schema & Anti-Hallucination Grounding (`app/schemas.py`, `app/clinical_rules.py`, `app/vertex_engine.py`)**:
+  - Balanced `{...}` JSON extraction and trailing-comma repair recover valid JSON even when models emit conversational preamble.
+  - Coerces non-standard `note_id` strings (`"Note 40012" -> 40012`), percentage confidence strings (`"94%" -> 0.94`), and status aliases (`"probable" -> "SUSPECTED_PROBABLE"`).
+  - Verifies every LLM-cited `evidence_quote` against the visit's chart text and strips hallucinated quotes.
+- **Strict Path & Input Guards (`app/paths.py`, `app/api.py`)**:
+  - All dataset paths in both FastAPI and Streamlit are canonicalized (`realpath`) and restricted to `.csv`/`.parquet` files inside `ROSEGOLD_DATA_DIR` (preventing path traversal and symlink escapes).
+  - Enforces streaming body-size limits, `X-Request-ID` correlation headers, constant-time `ROSEGOLD_API_KEY` authentication, and sanitized error responses that never leak clinical text or internal paths.
+- **Atomic Persistence & Thread Safety (`app/storage.py`, `app/engine.py`)**:
+  - Exports write to temporary files, `fsync`, and atomically `os.replace`.
+  - Concurrent audit log appends and local model generation calls are lock-serialized.
 
-```bash
-# 1. Transform raw extract into OMOP structure
-python scripts/prepare_mimic_iii_ext_notes.py \
-  --source /path/to/mimic-iii-ext-notes-1.0.0 \
-  --output data/mimic-iii-ext-notes
-
-# 2. Run adjudication over MIMIC encounters
-python -m app.adjudicator \
-  --notes_path data/mimic-iii-ext-notes/omop_notes.csv \
-  --visits_path data/mimic-iii-ext-notes/omop_visits.csv \
-  --target_condition "Sepsis / Septic Shock"
-
-# 3. Evaluate concept-level concordance against gold labels
-python scripts/eval_mimic_iii_ext_notes.py \
-  --source data/mimic-iii-ext-notes \
-  --phenotype-gold outputs/mimic_ext_sepsis_gold.csv \
-  --predictions outputs/mimic_ext_predictions.csv
-```
-
----
-
-## Troubleshooting & FAQ
-
-### 1. `GatedRepoError` or `Access Denied` when loading Llama-3.1
-**Cause**: Meta Llama-3.1 models require accepting the license agreement on Hugging Face.  
-**Solution**:
-1. Request access at [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct).
-2. Generate an access token at `huggingface.co/settings/tokens`.
-3. Export your token before running: `export HF_TOKEN="hf_..."`.
-
-### 2. CUDA Out of Memory (OOM) during Batch Inference
-**Solutions**:
-- Reduce maximum context length: `--max_model_len 16384` (default is 32768).
-- Use 8-bit FP8 quantization on Ada/Hopper architectures: `--quantization fp8`.
-- Lower GPU memory utilization ceiling: `export ROSEGOLD_GPU_MEMORY_UTILIZATION=0.80`.
-- Shard model across multiple GPUs: `--tensor_parallel_size 2`.
-
-### 3. File Permission Errors with Docker Volume Mounts
-**Cause**: Rootless Docker runs under an unprivileged user namespace, which may cause permissions mismatches if the host user owns the directory.  
-**Solution**:
-```bash
-mkdir -p outputs
-chmod 777 outputs  # Allow container to write outputs safely
-```
-
-### 4. Running Without Any GPU or Remote Endpoint
-**Solution**: Set `export ROSEGOLD_LLM_BACKEND=llamacpp` for 4-bit CPU inference, or `export ROSEGOLD_LLM_BACKEND=keyword_rules` for instant zero-dependency rule testing.
-
-### 5. Do we have to install Rose Gold (or Docker / Singularity) to use our own LLM?
-**No.** Rose Gold is the adjudication package (OMOP ingest, phenotypes, evidence quotes, audit, OMOP export). Set `ROSEGOLD_LLM_BACKEND=mantle` and it calls the site-approved Bedrock Mantle model. Docker and Singularity are optional packaging paths only. See [Native Python, No Container](#f-native-python-no-container-hospital-byo-llm).
-
----
-
-## Running Unit & Integration Tests
-
-Execute the comprehensive test suite:
-
+Run the full test suite locally:
 ```bash
 python -m pytest tests/ -q
 ```
+
+---
+
+## ❓ Troubleshooting & FAQ
+
+- **Do we need Docker or Singularity if our hospital already has AWS Bedrock or Databricks?**  
+  **No.** Set `ROSEGOLD_LLM_BACKEND=mantle` (or `databricks`) in a standard Python 3.11+ virtualenv and run `python -m app.adjudicator` or `./start_services.sh`.
+- **`GatedRepoError` when loading `meta-llama/Llama-3.1-8B-Instruct` on GPU?**  
+  Accept the Llama license on Hugging Face and export `HF_TOKEN="hf_..."`, or use the ungated CPU GGUF backend (`ROSEGOLD_LLM_BACKEND=llamacpp`).
+- **CUDA Out of Memory (OOM) on GPU?**  
+  Pass `--max_model_len 16384`, enable quantization (`--quantization fp8`), or shard across GPUs (`--tensor_parallel_size 2`).
