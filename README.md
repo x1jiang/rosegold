@@ -104,74 +104,59 @@ export HF_TOKEN="hf_..."
 ### 1. End-to-End Adjudication Pipeline
 
 ```mermaid
-flowchart LR
-    subgraph Ingest["1. Data Ingestion"]
-        A1["OMOP NOTE<br/>(.csv / .parquet)"] --> L["Chart Loader<br/>(app/omop_loader.py)"]
-        A2["OMOP VISIT_OCCURRENCE<br/>(.csv / .parquet)"] --> L
-        A3["MIMIC-III-Ext-Notes<br/>(notes.csv)"] --> L
-        L --> T["Chronological Visit<br/>Note Trajectory"]
-    end
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '18px', 'fontFamily': 'arial'}, 'flowchart': {'nodeSpacing': 25, 'rankSpacing': 30, 'padding': 14}}}%%
+flowchart TD
+    A1["📄 OMOP NOTE & VISIT Tables<br/>(.csv / .parquet / MIMIC notes.csv)"] --> L["1️⃣ Chronological Chart Loader<br/>(app/omop_loader.py)"]
 
-    subgraph Engine["2. Tiered Adjudication Engine"]
-        T --> R1["Tier 1: Clinical Rules &<br/>Negation Screen (±70 chars)"]
-        R1 -- "Fast Rule-Out" --> V["Schema & Evidence<br/>Grounding Guard"]
-        R1 -- "LLM Reasoning" --> R2["Tier 2: LLM Backend<br/>• Bedrock Mantle / Databricks<br/>• vLLM (Llama / Gemma)<br/>• Hybrid (Rules + Muse-30B)<br/>• llama.cpp (CPU GGUF)<br/>• Vertex AI Gemini"]
-        R2 --> V
-    end
+    L --> R1["2️⃣ Tier 1: Clinical Rules &<br/>Negation Screen (±70 chars)"]
 
-    subgraph Grounding["3. Verification & Guardrails"]
-        V --> G1["Balanced JSON Parser &<br/>Self-Healing Pydantic Schema"]
-        G1 --> G2["Chart Quote Verification<br/>(Strips Hallucinations)"]
-    end
+    R1 -- "Fast Rule-Out" --> G1["3️⃣ Self-Healing Schema &<br/>Quote Grounding Guard"]
+    R1 -- "Needs Deep Reasoning" --> R2["2️⃣ Tier 2: LLM Adjudication<br/>(Bedrock Mantle / vLLM / Hybrid / llama.cpp)"]
+    R2 --> G1
 
-    subgraph Output["4. Review & OMOP Export"]
-        G2 --> O1["Streamlit Web Portal (:8501)<br/>Inline Evidence Highlighting"]
-        G2 --> O2["FastAPI REST (:8000)<br/>& CLI Checkpoint Pipeline"]
-        O1 & O2 --> O3["OMOP OBSERVATION Table<br/>+ CSV / Parquet / JSONL<br/>+ Physician Audit Log"]
-    end
+    G1 --> O1["4️⃣ Interactive Web Portal (:8501)<br/>& FastAPI REST / CLI Batch"]
+    O1 --> O2["5️⃣ OMOP OBSERVATION Export<br/>+ Grounded JSONL & Physician Audit Log"]
 
-    classDef ingest fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1.5px;
-    classDef engine fill:#fff8e1,stroke:#f57f17,color:#e65100,stroke-width:1.5px;
-    classDef guard fill:#fce4ec,stroke:#c2185b,color:#880e4f,stroke-width:1.5px;
-    classDef output fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1.5px;
+    classDef ingest fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:2px;
+    classDef engine fill:#fff8e1,stroke:#f57f17,color:#e65100,stroke-width:2px;
+    classDef guard fill:#fce4ec,stroke:#c2185b,color:#880e4f,stroke-width:2px;
+    classDef output fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:2px;
 
-    class A1,A2,A3,L,T ingest;
+    class A1,L ingest;
     class R1,R2 engine;
-    class V,G1,G2 guard;
-    class O1,O2,O3 output;
+    class G1 guard;
+    class O1,O2 output;
 ```
 
 ---
 
 ### 2. Which Execution Path Fits Your Site?
 
-Use this decision tree to choose the right backend and deployment mode for your environment:
+Use this decision tree to pick the right backend for your hospital or research environment:
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '18px', 'fontFamily': 'arial'}, 'flowchart': {'nodeSpacing': 25, 'rankSpacing': 30, 'padding': 14}}}%%
 flowchart TD
-    Start(["Where are you deploying Rose Gold?"]) --> Q1{"Does your site already have an<br/>approved Cloud LLM endpoint?<br/>(Bedrock / Databricks / Vertex)"}
+    Start(["Where are you running Rose Gold?"]) --> Q1{"Site-approved Cloud LLM?<br/>(Bedrock / Databricks / Vertex)"}
 
-    Q1 -- "Yes" --> PathCloud["✅ Native Python + Hosted LLM<br/>• ROSEGOLD_LLM_BACKEND=mantle | databricks | vertex<br/>• No Docker, no Singularity, no GPU required"]
+    Q1 -- "Yes (No Container Needed)" --> PathCloud["✅ Native Python + Hosted LLM<br/>BACKEND = mantle | databricks | vertex"]
 
-    Q1 -- "No (Run On-Prem / Local)" --> Q2{"What compute environment<br/>are you running on?"}
+    Q1 -- "No (Run On-Prem / Local)" --> Q2{"HPC Cluster (Slurm)<br/>without root / Docker?"}
 
-    Q2 -- "HPC Cluster (Slurm / PBS)<br/>No root / Docker blocked" --> Q3{"GPU Node Available?"}
-    Q3 -- "Yes (--nv)" --> PathSingGPU["🚀 Singularity GPU (.sif)<br/>• singularity/rosegold.def<br/>• ROSEGOLD_LLM_BACKEND=vllm"]
-    Q3 -- "No (CPU Node)" --> PathSingCPU["💻 Singularity CPU (.sif)<br/>• singularity/rosegold_cpu.def<br/>• ROSEGOLD_LLM_BACKEND=llamacpp"]
+    Q2 -- "Yes (HPC Cluster)" --> PathHPC["📦 Singularity / Apptainer (.sif)<br/>• GPU Node: --nv + BACKEND=vllm<br/>• CPU Node: BACKEND=llamacpp"]
 
-    Q2 -- "Linux Server / Workstation" --> Q4{"NVIDIA GPU Available?"}
-    Q4 -- "Yes (16GB+ VRAM)" --> PathGPU["⚡ vLLM or Hybrid GPU<br/>• Docker Compose or Native Python<br/>• ROSEGOLD_LLM_BACKEND=vllm | hybrid"]
-    Q4 -- "No (CPU / Laptop)" --> PathCPU["🖥️ llama.cpp CPU GGUF<br/>• Dockerfile.cpu or Native Python<br/>• ROSEGOLD_LLM_BACKEND=llamacpp"]
+    Q2 -- "No (Server / Workstation)" --> Q3{"NVIDIA GPU Available?"}
 
-    Q2 -- "Google Cloud Serverless" --> PathCR["☁️ Google Cloud Run<br/>• ./deploy_to_gcp.sh<br/>• Baked Llama-3.2-3B GGUF + GCS Mount"]
+    Q3 -- "Yes (16GB+ VRAM)" --> PathGPU["⚡ GPU Server (Docker / Python)<br/>BACKEND = vllm | hybrid"]
+    Q3 -- "No (CPU / Laptop / Cloud Run)" --> PathCPU["🖥️ CPU GGUF (Dockerfile.cpu / Python)<br/>BACKEND = llamacpp | keyword_rules"]
 
-    classDef cloud fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1.5px;
-    classDef gpu fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1.5px;
-    classDef cpu fill:#fff8e1,stroke:#f57f17,color:#e65100,stroke-width:1.5px;
+    classDef cloud fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:2px;
+    classDef gpu fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:2px;
+    classDef cpu fill:#fff8e1,stroke:#f57f17,color:#e65100,stroke-width:2px;
 
-    class PathCloud,PathCR cloud;
-    class PathSingGPU,PathGPU gpu;
-    class PathSingCPU,PathCPU cpu;
+    class PathCloud cloud;
+    class PathHPC,PathGPU gpu;
+    class PathCPU cpu;
 ```
 
 ---
@@ -181,28 +166,22 @@ flowchart TD
 Every adjudication passes through schema normalization and anti-hallucination chart verification before reaching the clinician or output tables:
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '17px', 'fontFamily': 'arial'}, 'sequence': {'actorMargin': 35, 'width': 155, 'height': 46, 'messageFontSize': 16, 'actorFontSize': 17}}}%%
 sequenceDiagram
     autonumber
     actor User as Clinician / CLI
-    participant UI as Web Portal (:8501)
-    participant API as FastAPI (:8000)
-    participant Eng as AdjudicationEngine
-    participant Guard as Schema & Grounding Guard
-    participant Store as Durable Store (GCS / Local)
+    participant Portal as Web UI & FastAPI
+    participant Engine as LLM / Rule Engine
+    participant Guard as Grounding & Store
 
-    User->>UI: Select Visit & Click "Adjudicate"
-    UI->>API: POST /api/adjudicate/single
-    API->>Eng: adjudicate_single(record, condition, criteria)
-    Eng->>Eng: Execute Configured Backend (LLM or Rules)
-    Eng->>Guard: _parse_model_json() + RoseGoldAdjudication
-    Guard->>Guard: Normalize status, clamp confidence [0,1], coerce note_id
-    Guard->>Guard: verify_and_ground_adjudication() against chart text
-    Guard-->>API: Verified Adjudication Payload
-    API-->>UI: JSON Response + X-Request-ID
-    UI-->>User: Render Status + Highlight Verbatim Quotes in Notes
-    User->>UI: Click "Sign & Save Verification"
-    UI->>API: POST /api/feedback
-    API->>Store: Atomic append to human_audit_log.jsonl
+    User->>Portal: Select Visit & Click "Adjudicate"
+    Portal->>Engine: adjudicate_single(visit, condition)
+    Engine-->>Guard: Raw Model JSON Output
+    Guard->>Guard: Normalize schema & strip hallucinated quotes
+    Guard-->>Portal: Verified RoseGoldAdjudication
+    Portal-->>User: Show Status + Highlight Quotes in Notes
+    User->>Portal: Click "Sign & Save Verification"
+    Portal->>Guard: Atomic append to human_audit_log.jsonl
 ```
 
 ---
