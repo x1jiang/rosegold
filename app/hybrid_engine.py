@@ -12,6 +12,8 @@ Hardening
 * ``ROSEGOLD_MUSE_API_KEY`` (optional) is sent as a bearer token.
 * When the LLM call fails, the result is labelled ``hybrid:rules_only(...)`` with
   a reduced confidence instead of claiming an LLM verification that never ran.
+  Opt-in required-Muse mode instead returns indeterminate on model failure and
+  never substitutes a rule-only decision.
 """
 
 from __future__ import annotations
@@ -165,12 +167,20 @@ class HybridAdjudicationEngine:
             if response.status_code != 200:
                 raise RuntimeError(f"http_{response.status_code}")
             body = response.json()
+            if not isinstance(body, dict):
+                raise ValueError("Muse response is not an object")
             if body.get("model") != self.model_name:
                 raise ValueError("Muse response model does not match requested model")
-            choice = body["choices"][0]
+            choices = body.get("choices")
+            if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+                raise ValueError("Muse response has no valid completion choice")
+            choice = choices[0]
             if choice.get("finish_reason") != "stop":
                 raise ValueError("Muse response did not finish normally")
-            result = _parse_model_json(choice["message"]["content"]).model_dump()
+            message = choice.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+                raise ValueError("Muse completion has no text message")
+            result = _parse_model_json(message["content"]).model_dump()
             normalize = lambda s: re.sub(r"\s+", " ", s).strip()
             result["key_evidence"] = [ev for ev in result["key_evidence"]
                                       if normalize(ev["evidence_quote"]) in normalize(chart)]

@@ -60,6 +60,21 @@ def test_required_mode_fails_closed():
         assert result["inference_backend"].startswith("hybrid:llm_failed(")
 
 
+def test_required_mode_fails_closed_for_malformed_response_shapes():
+    for body in [None, [], "invalid", {"model": "Muse-Test", "choices": [None]},
+                 {"model": "Muse-Test", "choices": [{"finish_reason": "stop", "message": []}]}]:
+        class MalformedSession(Session):
+            def post(self, url, **kwargs):
+                response = super().post(url, **kwargs)
+                response.json = lambda: body
+                return response
+
+        result = run(MalformedSession())
+        assert result["phenotype_status"] == "INDETERMINATE_INSUFFICIENT_DATA"
+        assert result["key_evidence"] == []
+        assert result["inference_backend"].startswith("hybrid:llm_failed(")
+
+
 def test_required_mode_rejects_ungrounded_evidence_and_handles_chat_url():
     session = Session(payload("Completely invented laboratory test."))
     result = run(session, "https://muse.internal/v1/chat/completions")
