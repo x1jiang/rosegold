@@ -313,6 +313,14 @@ python -m app.adjudicator \
   --target_condition "Sepsis / Septic Shock"
 ```
 
+For runs that require Muse to adjudicate every case, set
+`ROSEGOLD_HYBRID_REQUIRE_LLM=1`. This mode sends the rule screen and source
+observations to Muse's structured chat endpoint, preserves indeterminate results,
+and retains only exact source quotes. The rule screen is a candidate for Muse to
+review. Model failures produce an indeterminate result with a `hybrid:llm_failed`
+backend tag. The default hybrid cascade continues to use its existing fast screen.
+The endpoint must serve the configured model on `/v1/chat/completions`.
+
 ---
 
 ### Backend 5: Google Vertex AI Gemini

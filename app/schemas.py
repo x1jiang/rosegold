@@ -63,12 +63,11 @@ _STATUS_ALIASES = {
 
 class RoseGoldAdjudication(BaseModel):
     """
-    Structured Clinical Adjudication Schema with Instructor.
-    Note: clinical_rationale is placed first to enforce Chain-of-Thought reasoning before classification.
+    Structured clinical adjudication with a concise, evidence-linked decision summary.
     """
     clinical_rationale: str = Field(
         ...,
-        description="Step-by-step clinical chain-of-thought reasoning assessing infection, organ dysfunction, or pathology."
+        description="Concise decision summary linking supplied findings to the classification and noting material uncertainty. Do not include private reasoning."
     )
     primary_criteria_met: List[str] = Field(
         default_factory=list,
@@ -95,7 +94,7 @@ class RoseGoldAdjudication(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Calibrated confidence score between 0.0 and 1.0"
+        description="Self-reported model confidence between 0.0 and 1.0, not an empirically calibrated probability"
     )
     visit_occurrence_id: Optional[int] = Field(None, description="OMOP visit_occurrence_id")
     person_id: Optional[int] = Field(None, description="OMOP person_id")
