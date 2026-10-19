@@ -321,6 +321,11 @@ review. Model failures produce an indeterminate result with a `hybrid:llm_failed
 backend tag. The default hybrid cascade continues to use its existing fast screen.
 The endpoint must serve the configured model on `/v1/chat/completions`.
 
+For CHORUS reviewer questionnaires, use the [survey review adapter](docs/chorus_survey_review.md).
+It accepts local raw-coded data and dictionary CSVs, applies the reviewed evidence
+gates with same-patient context, and exports source-linked review CSVs plus an
+audit trail. Primary labels and outcome answers are withheld from inference.
+
 ---
 
 ### Backend 5: Google Vertex AI Gemini
