@@ -44,6 +44,7 @@ COPY requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/requirements.txt \
     && pip install --no-cache-dir "huggingface_hub>=0.23,<1" \
     && pip install --no-cache-dir \
+        --only-binary=llama-cpp-python \
         --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
         "llama-cpp-python>=0.2.90,<1"
 
