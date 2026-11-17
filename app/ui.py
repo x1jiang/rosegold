@@ -18,6 +18,7 @@ import streamlit as st
 from app.engine import AdjudicationEngine
 from app.omop_loader import load_omop_data
 from app.mimic_ext_notes import looks_like_mimic_ext_notes_path
+from app.chorus_ui_demo import render_chorus_redcap_tab
 from app.concordance import calculate_concordance_metrics
 from app.omop_export import export_to_omop_observation
 from app.config_loader import resolve_criteria
@@ -623,12 +624,13 @@ else:
 st.divider()
 
 # ---------------------------------------------------------
-# Tabs: Review | Calibration | Batch | Definitions | Tutorial
+# Tabs: Review | Calibration | Batch | REDCap | Definitions | Tutorial
 # ---------------------------------------------------------
-tab_review, tab_calib, tab_batch, tab_rules, tab_tutorial = st.tabs([
+tab_review, tab_calib, tab_batch, tab_redcap, tab_rules, tab_tutorial = st.tabs([
     "🔍 Interactive Chart Review",
     "📊 Calibration & Concordance Matrix",
     "⚡ Batch Adjudication & OMOP Export",
+    "📋 REDCap Survey & Concordance",
     "🛠️ Phenotype Rules & Prompts",
     "📖 CLI & FastAPI Tutorial"
 ])
@@ -1080,7 +1082,13 @@ with tab_batch:
         )
 
 # ---------------------------------------------------------
-# TAB 4: PHENOTYPE RULES & PROMPTS
+# TAB 4: REDCAP SURVEY & CONCORDANCE
+# ---------------------------------------------------------
+with tab_redcap:
+    render_chorus_redcap_tab()
+
+# ---------------------------------------------------------
+# TAB 5: PHENOTYPE RULES & PROMPTS
 # ---------------------------------------------------------
 with tab_rules:
     st.markdown("### 🛠️ Phenotype Criteria & Adjudication Guidelines")
