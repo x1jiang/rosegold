@@ -85,3 +85,10 @@ def calculate_concordance_metrics(df_merged: pd.DataFrame) -> Dict[str, Any]:
         "npv": round(npv * 100, 1),
         "tp": tp, "fp": fp, "fn": fn, "tn": tn
     }
+
+
+def evaluate_chorus_concordance(*args, **kwargs) -> Dict[str, Any]:
+    """Re-export multi-level CHoRUS REDCap concordance evaluation without altering binary metrics."""
+    from app.chorus_concordance import evaluate_chorus_concordance as _evaluate
+
+    return _evaluate(*args, **kwargs)
